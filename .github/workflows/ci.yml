@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch: a new push makes the older result
+# irrelevant, and leaving it running wastes the minutes that matter on a fix.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Syntax, import resolution, the Vercel function budget, the secret scan,
+      # static asset references and the .env.example contract.
+      - name: Check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      # No database is reachable from CI, and none is needed: schema, migrations,
+      # RLS and SQL are verified locally with `npm run db:verify` against an
+      # embedded PostgreSQL.

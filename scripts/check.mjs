@@ -258,6 +258,21 @@ for (const { from, ref } of assetRefs) {
 }
 if (missingAssets === 0) pass(`${assetRefs.length} local asset references resolve`);
 
+// …and the other direction: every module under apps/web/js must be precached, or
+// the app cannot boot offline. A new file that nobody adds to SHELL otherwise only
+// shows up as a broken install.
+const precached = new Set(
+  [...(fs.existsSync(swPath) ? fs.readFileSync(swPath, 'utf8') : '').matchAll(/['"]\.\/(js\/[^'"]+)['"]/g)].map(
+    (m) => m[1],
+  ),
+);
+const unprecached = walk(path.join(WEB, 'js'), isJs)
+  .map((file) => path.relative(WEB, file).split(path.sep).join('/'))
+  .filter((rel) => !precached.has(rel))
+  .sort();
+if (unprecached.length === 0) pass(`all ${precached.size} precached modules exist and every module is listed`);
+else for (const rel of unprecached) fail(`${rel} is not in the service worker precache list`);
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(

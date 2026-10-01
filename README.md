@@ -34,6 +34,7 @@ packages/
 apps/web/       static PWA frontend
 database/       schema.sql + migrations
 scripts/        migrate, seed, reset, create-admin, check, verify-db, serve-web, build-icons
+.github/        CI (check + test) and Pages deployment workflows
 docs/           architecture, security, deployment
 tests/          vitest
 ```

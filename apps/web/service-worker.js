@@ -18,6 +18,7 @@ const SHELL = [
   './js/store.js',
   './js/router.js',
   './js/ui.js',
+  './js/auth-events.js',
   './js/views/auth.js',
   './js/views/mail-list.js',
   './js/views/message.js',

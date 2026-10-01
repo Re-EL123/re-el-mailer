@@ -109,7 +109,10 @@ as a bearer token automatically.
 
 ## 5. Frontend (GitHub Pages)
 
-1. Push to the default branch; the Pages workflow builds and publishes `apps/web`.
+1. In *Settings → Pages*, set the source to **GitHub Actions**. `.github/workflows/pages.yml`
+   publishes `apps/web` on every push to `main` that touches the frontend. There is no
+   build step: the PWA is served as written, and the workflow only verifies that its
+   asset references resolve.
 2. Point `mail.re-el.co.za` at the Pages site (or add a CNAME file if serving from a
    `github.io` domain).
 3. The API origin is set in `apps/web/index.html` via `window.__REEL_CONFIG__.apiBase`
