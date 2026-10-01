@@ -9,7 +9,6 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test_jwt_secret_that_is_definitely_long_enough_to_pass_validation_0123456789';
-process.env.TOKEN_PEPPER = 'test_pepper_also_long_enough_0123456789abcdefghij';
 
 const { verifyAccessToken, signAccessToken, decodeAccessToken, accessTokenExpiresAt, parseAccessTokenTtl } =
   await import('../packages/auth/tokens.js');

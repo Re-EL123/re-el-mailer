@@ -15,7 +15,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = 'postgres://user:pass@localhost:5432/re_el';
 process.env.JWT_SECRET = 'test_jwt_secret_that_is_definitely_long_enough_to_pass_validation_0123456789';
-process.env.TOKEN_PEPPER = 'test_pepper_also_long_enough_0123456789abcdefghij';
 process.env.MAIL_DAILY_LIMIT_USER = '200';
 process.env.MAIL_HOURLY_LIMIT_USER = '20';
 process.env.MAIL_DAILY_LIMIT_DOMAIN = '5000';

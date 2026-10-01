@@ -367,7 +367,6 @@ await client.query(`update public.mailboxes set storage_used_bytes = $1 where id
     process.env.DATABASE_URL = `${BASE}/re_el`;
     process.env.DATABASE_SSL = 'false';
     process.env.JWT_SECRET = 'verify-secret-at-least-32-characters-long';
-    process.env.SESSION_SECRET = process.env.JWT_SECRET;
     process.env.APP_URL = 'http://localhost:3000';
 
     const messages = await import('../packages/db/messages.js');

@@ -134,7 +134,7 @@ const SECRET_PATTERNS = [
   [/service[_-]?role[_-]?key\s*[:=]\s*['"][^'"]{8,}/i, 'Supabase service role key'],
   [/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/, 'JWT'],
   [/postgres(ql)?:\/\/[^\s'"`]+:[^\s'"@]+@/i, 'database URL with a password'],
-  [/\b(JWT_SECRET|SESSION_SECRET|RESEND_API_KEY|DATABASE_URL)\s*[:=]\s*['"][^'"]+/, 'server secret literal'],
+  [/\b(JWT_SECRET|RESEND_API_KEY|DATABASE_URL)\s*[:=]\s*['"][^'"]+/, 'server secret literal'],
 ];
 
 let secretHits = 0;
@@ -148,6 +148,26 @@ for (const file of walk(path.join(ROOT, 'apps'), (f) => /\.(js|html|json|css|web
   }
 }
 if (secretHits === 0) pass('no keys, tokens or connection strings in apps/');
+
+// ─── 4b. Text-safe source ────────────────────────────────────────────────────
+
+// A raw control byte inside a regex literal is legal JavaScript and passes every
+// syntax check, but it makes the file binary to grep, git diff and every editor
+// — so the file silently drops out of review and search. Both occurrences were
+// character classes written with real bytes instead of \x escapes.
+console.log('\n\x1b[1m4b. Text-safe source files\x1b[0m');
+const TEXT_EXT = /\.(js|mjs|cjs|json|md|sql|css|html|webmanifest|svg|yml|yaml)$/;
+let binaryFiles = 0;
+for (const file of walk(ROOT, (f) => TEXT_EXT.test(f) && f !== '.env.example')) {
+  const bytes = fs.readFileSync(file);
+  const offenders = bytes.filter((b) => b < 9 || (b > 13 && b < 32) || b === 127);
+  if (offenders.length > 0) {
+    const line = bytes.slice(0, bytes.indexOf(offenders[0])).toString('utf8').split('\n').length;
+    fail(`${relative(file)} contains ${offenders.length} raw control byte(s) (first on line ${line}); write them as \\x escapes`);
+    binaryFiles += 1;
+  }
+}
+if (binaryFiles === 0) pass('no raw control bytes in source files');
 
 // ─── 5. Required files ───────────────────────────────────────────────────────
 
@@ -196,7 +216,7 @@ else for (const key of undocumented) fail(`config reads ${key} but .env.example 
 
 const emptyRequired = [...envExample.matchAll(/^([A-Z0-9_]+)=\s*$/gm)]
   .map((m) => m[1])
-  .filter((key) => !/^(RESEND_API_KEY|JWT_SECRET|SESSION_SECRET|TOKEN_PEPPER|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|CRON_SECRET|RESEND_INBOUND_WEBHOOK_SECRET|RESEND_EVENT_WEBHOOK_SECRET|HEALTHCHECK_TOKEN|MAIL_REPLY_TO|INBOUND_AUTO_READ_SENDERS|MAIL_FROM_EMAIL)$/.test(key));
+  .filter((key) => !/^(RESEND_API_KEY|JWT_SECRET|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|CRON_SECRET|RESEND_INBOUND_WEBHOOK_SECRET|RESEND_EVENT_WEBHOOK_SECRET|HEALTHCHECK_TOKEN|MAIL_REPLY_TO|INBOUND_AUTO_READ_SENDERS|MAIL_FROM_EMAIL)$/.test(key));
 // Values left blank are secrets or deployment-specific; a blank default for
 // anything else would silently ship a placeholder.
 if (emptyRequired.length === 0) pass('no unintended blank values in .env.example');

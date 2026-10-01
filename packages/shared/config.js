@@ -122,7 +122,6 @@ export const supabase = {
 
 export const auth = {
   jwtSecret: () => required('JWT_SECRET'),
-  sessionSecret: () => optional('SESSION_SECRET') || required('JWT_SECRET'),
   accessTokenTtl: optional('ACCESS_TOKEN_TTL', '15m'),
   refreshTokenTtlDays: asInt('REFRESH_TOKEN_TTL_DAYS', 30),
   cookieSecure: asBool('COOKIE_SECURE', env.isProduction),

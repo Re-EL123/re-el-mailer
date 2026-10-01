@@ -17,16 +17,34 @@ boot and fails fast in production.
 | `NODE_ENV` | `production` in deployed environments |
 | `APP_URL` | Canonical frontend origin; required in production |
 | `ALLOWED_ORIGINS` | Comma-separated CORS allowlist including `APP_URL` |
-| `DATABASE_URL` / `DIRECT_URL` | Supabase Postgres (pooled) and direct connection |
+| `DATABASE_URL` | Supabase Postgres, pooled (port 6543) connection string |
+| `DIRECT_URL` | Supabase Postgres direct connection (port 5432), for migrations |
 | `DATABASE_SSL` | `true` for Supabase |
-| `JWT_SECRET`, `TOKEN_PEPPER`, `WEBHOOK_SECRET` | Signing/verification secrets |
-| `ACCESS_TOKEN_TTL_SECONDS`, `REFRESH_TOKEN_TTL_DAYS` | Session lifetimes |
-| `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | Resend delivery + inbound verification |
-| `STORAGE_BUCKET`, `STORAGE_*` | Supabase Storage credentials and path prefix |
-| `CRON_SECRET` | Bearer secret for the maintenance cron endpoint |
-| `ALLOW_DESTRUCTIVE_RESET` | Must be `1` to allow `npm run reset` |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Storage uploads and signed download URLs |
+| `ATTACHMENT_BUCKET` | Private Storage bucket name; must **not** be public |
+| `JWT_SECRET` | Signs access tokens, and derives reset/email-verify tokens |
+| `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL_DAYS` | Session lifetimes (e.g. `15m`, `30`) |
+| `COOKIE_SECURE`, `COOKIE_SAMESITE` | `true` / `lax` — the API and PWA are same-site subdomains |
+| `RESEND_API_KEY` | Outbound delivery |
+| `RESEND_INBOUND_WEBHOOK_SECRET` | Signs the inbound-mail webhook |
+| `RESEND_EVENT_WEBHOOK_SECRET` | Signs the delivery-event webhook |
+| `MAIL_FROM_EMAIL`, `MAIL_FROM_NAME` | Verified sending identity |
+| `MAIL_DOMAINS` | Comma-separated domains this deployment serves mailboxes for |
+| `CRON_SECRET` | Bearer secret Vercel sends to the maintenance cron |
+| `HEALTHCHECK_TOKEN` | Optional bearer for `?action=ping` monitoring |
 
-Generate secrets with something like `openssl rand -base64 48`.
+Generate secrets with `openssl rand -base64 48`.
+
+`.env.example` is the authoritative list and `npm run check` fails if the two drift
+apart, but that check only covers *presence*, not semantics. Two worth calling out:
+
+- `COOKIE_SAMESITE` must stay `lax`. `mail.re-el.co.za` and `api.mail.re-el.co.za`
+  are the same site, so `none` is unnecessary; `strict` would block the refresh
+  cookie on some navigation paths.
+- `MAIL_DOMAINS` must match the domains registered in the admin console. It is the
+  first thing to check if a new domain's mail is rejected.
+
+`npm run reset` is guarded by the `--yes` flag rather than an environment variable.
 
 Because the API and frontend are on different origins, `ALLOWED_ORIGINS` must list the
 frontend origin exactly, and the CORS layer must allow credentials so the `httpOnly`
@@ -66,9 +84,10 @@ npm run seed -- --demo
 
 ### Storage
 
-Create a private bucket (default name in `.env.example`), then configure
-`STORAGE_BUCKET`, `STORAGE_*` credentials and `STORAGE_PATH_PREFIX`. The bucket must
-**not** be public — downloads go through short-lived signed URLs.
+The migration creates the `mail-attachments` bucket for you, private by default —
+no manual step. Downloads go through short-lived signed URLs, so flipping the bucket to
+public in the Supabase dashboard would bypass that entirely; the schema resets
+`public = false` on every run.
 
 ## 3. DNS
 
@@ -101,8 +120,10 @@ curl https://api.mail.re-el.co.za/api/health?action=ping
 ```
 
 Configure the Resend inbound webhook to
-`https://api.mail.re-el.co.za/api/webhooks?action=inbound` and the delivery-event
-webhook to `.../api/webhooks?action=delivery`, both signed with `RESEND_WEBHOOK_SECRET`.
+`https://api.mail.re-el.co.za/api/webhooks?action=inbound` with
+`RESEND_INBOUND_WEBHOOK_SECRET`, and the delivery-event webhook to
+`.../api/webhooks?action=delivery` with `RESEND_EVENT_WEBHOOK_SECRET`. Resend shows
+each secret when you create the endpoint; they are distinct values.
 
 The maintenance cron runs daily at 03:17 UTC and requires `CRON_SECRET`; Vercel sends it
 as a bearer token automatically.
