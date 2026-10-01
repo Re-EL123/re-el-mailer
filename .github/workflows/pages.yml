@@ -34,8 +34,12 @@ jobs:
       - name: Check static assets resolve
         run: node scripts/check.mjs
 
+      # `enablement: true` lets the first deployment turn Pages on for the repo
+      # instead of failing with "Get Pages site failed" on a freshly created one.
       - uses: actions/configure-pages@v5
         id: pages
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
