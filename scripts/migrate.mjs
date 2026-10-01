@@ -7,7 +7,13 @@
  *
  * Usage:
  *   npm run db:migrate
- *   DATABASE_URL=... node scripts/migrate.mjs
+ *   DIRECT_URL=... node scripts/migrate.mjs
+ *
+ * Migrations prefer DIRECT_URL and fall back to DATABASE_URL. Preferring the
+ * direct connection matters: schema.sql issues DDL, `create extension`,
+ * `create policy` and `alter table … enable row level security`, none of which
+ * are safe through Supabase's transaction pooler, which multiplexes over one
+ * connection and hands a later statement to an unrelated session.
  */
 
 import fs from 'node:fs';
@@ -27,8 +33,13 @@ async function main() {
   // Mirror the pool's TLS settings. Supabase requires SSL, and a migration that
   // connects without it fails against a remote database even though the app works.
   const wantSsl = process.env.DATABASE_SSL !== 'false';
+  const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL || '';
+  if (!connectionString) {
+    console.error('Neither DIRECT_URL nor DATABASE_URL is set. Set DIRECT_URL to the direct (non-pooler) connection string.');
+    process.exit(1);
+  }
   const client = new Client({
-    connectionString: process.env.DATABASE_URL,
+    connectionString,
     ...(wantSsl
       ? { ssl: { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'true' } }
       : null),

@@ -53,13 +53,20 @@ refresh cookie travels. The frontend always sends `credentials: 'include'`.
 ## 2. Database (Supabase)
 
 1. Create a Supabase project.
-2. Copy the pooled connection string into `DATABASE_URL` and the direct (non-pooler)
-   string into `DIRECT_URL`.
-3. Run migrations:
+2. Copy the **pooled** connection string (port `6543`) into `DATABASE_URL` — this is what
+   the serverless API uses — and the **direct** string (port `5432`) into `DIRECT_URL`.
+3. Run migrations against the *direct* connection:
 
 ```bash
-DATABASE_URL=... DIRECT_URL=... npm run migrate
+DIRECT_URL=postgres://...@db.<ref>.supabase.co:5432/postgres npm run migrate
 ```
+
+`npm run migrate` prefers `DIRECT_URL` and only falls back to `DATABASE_URL`. This is
+not cosmetic: `schema.sql` issues `create extension`, `create policy` and
+`alter table … enable row level security`, and the transaction pooler multiplexes
+statements over a single backend connection, so DDL run through it can fail or apply
+against the wrong session. The app itself is fine on the pooled string — keep
+`DATABASE_URL` pooled for Vercel, where many concurrent functions share one pool.
 
 4. Verify:
 
