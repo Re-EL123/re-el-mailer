@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-density="comfortable">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Re-EL Mailer</title>
+    <meta name="description" content="Business email. Built for Re-EL." />
+    <meta name="theme-color" content="#21396A" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#101522" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="manifest" href="manifest.json" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="assets/icon-192.png" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script>
+      // API origin.
+      //
+      // Production runs the frontend on GitHub Pages (mail.re-el.co.za) and the
+      // API on Vercel (api.mail.re-el.co.za), so the default must be an absolute
+      // cross-origin URL: a same-origin '/api' would resolve against the Pages
+      // host, which has no functions and returns 404 for every call.
+      //
+      // Local development serves both through scripts/serve-web.mjs, which
+      // proxies /api to the local handler, and can override this with
+      // ?api=http://localhost:3000 for a separately started API.
+      window.__REEL_CONFIG__ = {
+        apiBase: 'https://api.mail.re-el.co.za',
+      };
+      // Same-origin proxy path: only when the page is served locally.
+      if (['localhost', '127.0.0.1'].includes(location.hostname)) {
+        window.__REEL_CONFIG__.apiBase = '/api';
+        const override = new URLSearchParams(location.search).get('api');
+        if (override) window.__REEL_CONFIG__.apiBase = override;
+      }
+    </script>
+  </head>
+  <body data-mode="public">
+    <div id="root"></div>
+    <noscript>Re-EL Mailer requires JavaScript.</noscript>
+    <script type="module" src="js/app.js"></script>
+    <script>
+      if ('serviceWorker' in navigator && location.protocol === 'https:') {
+        window.addEventListener('load', () => navigator.serviceWorker.register('service-worker.js'));
+      }
+    </script>
+  </body>
+</html>

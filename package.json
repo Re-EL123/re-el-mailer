@@ -1,0 +1,43 @@
+{
+  "name": "re-el-mailer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Re-EL Mailer - business email platform for re-el.co.za (GitHub Pages frontend + Vercel serverless API + Supabase PostgreSQL + Resend)",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:api": "vercel dev --listen 3000",
+    "dev:web": "node scripts/serve-web.mjs",
+    "build": "node scripts/build-icons.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:seed": "node scripts/seed.mjs",
+    "db:reset": "node scripts/reset.mjs",
+    "check": "node scripts/check.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "node scripts/check.mjs",
+    "lint": "node scripts/check.mjs",
+    "create-admin": "node scripts/create-admin.mjs",
+    "db:verify": "node scripts/verify-db.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.57.4",
+    "bcryptjs": "2.4.3",
+    "jsonwebtoken": "9.0.2",
+    "pg": "8.13.1",
+    "zod": "4.1.5"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17",
+    "vercel": "39.2.2",
+    "vitest": "3.0.6"
+  },
+  "allowScripts": {
+    "esbuild@0.14.47": true,
+    "esbuild@0.25.12": true,
+    "@embedded-postgres/linux-x64@18.4.0-beta.17": true
+  }
+}
