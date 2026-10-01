@@ -4,7 +4,7 @@ Two deployments: the API on Vercel, the frontend on GitHub Pages.
 
 ```
 api.mail.re-el.co.za   →  Vercel serverless functions
-mail.re-el.co.za       →  GitHub Pages (static PWA)
+mailer.re-el.co.za       →  GitHub Pages (static PWA)
 ```
 
 ## 1. Environment variables
@@ -107,7 +107,7 @@ For `re-el.co.za`, publish records for receiving and for sending reputation:
 | TXT | `resend._domainkey.re-el.co.za` | Resend DKIM public key |
 | TXT | `_dmarc.re-el.co.za` | `v=DMARC1; p=quarantine; rua=mailto:dmarc@re-el.co.za` |
 | CNAME/A | `api.mail.re-el.co.za` | Vercel API domain |
-| CNAME | `mail.re-el.co.za` | GitHub Pages |
+| CNAME | `mailer.re-el.co.za` | GitHub Pages |
 
 MX propagation can take a while; verify with `dig MX re-el.co.za` before expecting
 inbound mail to arrive.
@@ -118,8 +118,19 @@ inbound mail to arrive.
 2. Vercel detects the functions in `api/` automatically; `vercel.json` declares the
    runtime, headers and cron. Confirm the function count matches `vercel.json`
    (`npm run check` enforces this).
+
+   Do not "clean up" the two odd-looking entries in `vercel.json`. `"buildCommand": ""`
+   is an empty string, not `null`: `null` means *unset*, so Vercel auto-detects the
+   `build` script in `package.json`, runs it, and then fails with *"No Output
+   Directory named \"public\" found"*. And `outputDirectory` must name a directory that
+   exists and is empty (here, `public/`) — because the functions are deployed
+   **unbundled**, each shipping its own copy of `api/`, `packages/` and
+   `node_modules/`, Vercel uploads the whole repository. Without an explicit output
+   directory it publishes that repository as static files, and `schema.sql`,
+   `docs/security.md` and the rest of `packages/` become readable on the API domain.
+   `npm run check` fails on either mistake.
 3. Add every environment variable from step 1 to **Production and Preview**.
-4. Set `APP_URL=https://mail.re-el.co.za` and include that origin in `ALLOWED_ORIGINS`.
+4. Set `APP_URL=https://mailer.re-el.co.za` and include that origin in `ALLOWED_ORIGINS`.
 5. Deploy and verify:
 
 ```bash
@@ -141,8 +152,8 @@ as a bearer token automatically.
    publishes `apps/web` on every push to `main` that touches the frontend. There is no
    build step: the PWA is served as written, and the workflow only verifies that its
    asset references resolve.
-2. Point `mail.re-el.co.za` at the Pages site (or add a CNAME file if serving from a
-   `github.io` domain).
+2. `apps/web/CNAME` already pins `mailer.re-el.co.za`, so Pages serves the custom
+   domain once the CNAME record exists. Add a second hostname as an extra CNAME line if needed.
 3. The API origin is set in `apps/web/index.html` via `window.__REEL_CONFIG__.apiBase`
    and defaults to `https://api.mail.re-el.co.za`, which is correct for this split
    deployment. It only falls back to the same-origin `/api` path when the page is

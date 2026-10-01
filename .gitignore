@@ -36,3 +36,4 @@ Thumbs.db
 # logs and local scratch output from scripts
 *.log
 scripts/.out/
+.vercel

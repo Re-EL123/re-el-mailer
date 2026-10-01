@@ -14,8 +14,19 @@ import { sanitizeHtml } from '../shared/sanitize.js';
 import { formatFrom } from './compose.js';
 import { sendEmail } from './resend.js';
 
+/** Display host for the footer, derived from APP_URL so the label can never
+ *  disagree with the link beside it. */
+function appHost() {
+  try {
+    return new URL(app.url).host;
+  } catch {
+    return 'Re-EL Mailer';
+  }
+}
+
 /** Shared shell: inline styles only, 600px wide, dark-mode friendly. */
 function shell({ title, preheader, bodyHtml }) {
+  const host = appHost();
   return `<!doctype html>
 <html lang="en" dir="ltr">
 <head>
@@ -61,7 +72,7 @@ function shell({ title, preheader, bodyHtml }) {
     <div class="bd">${bodyHtml}</div>
     <div class="ft">
       Sent by Re-EL Mailer. This is an automated message — replies are not monitored.
-      <br><a href="${app.url}/">mail.re-el.co.za</a>
+      <br><a href="${app.url}/">${host}</a>
     </div>
   </td></tr></table>
 </td></tr></table>
@@ -93,7 +104,9 @@ async function send({ to, subject, html, text, from, replyTo }) {
 
 /** Password reset. `token` is the raw token from password_resets.token. */
 export async function sendPasswordReset({ to, displayName, token, ttlMinutes = 30 }) {
-  const link = `${app.url}/reset-password.html?token=${encodeURIComponent(token)}`;
+  // The frontend is a single page with a hash router: there is no
+  // reset-password.html, and the reset view is only reachable at #/reset.
+  const link = `${app.url}/#/reset?token=${encodeURIComponent(token)}`;
   const name = safe(displayName || 'there');
 
   return send({
@@ -126,7 +139,7 @@ export async function sendPasswordReset({ to, displayName, token, ttlMinutes = 3
 /** Welcome mail for a newly provisioned mailbox. */
 export async function sendWelcome({ to, displayName, temporaryPassword }) {
   const name = safe(displayName || 'there');
-  const link = `${app.url}/login.html`;
+  const link = `${app.url}/#/`;
 
   return send({
     to,

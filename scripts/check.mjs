@@ -126,6 +126,52 @@ for (const name of functions) {
   if (!/export\s+default\s+/.test(source)) fail(`api/${name}.js has no default export`);
 }
 
+// The functions are deployed unbundled: each .func ships api/, packages/ and
+// node_modules/, so the whole repo has to be uploaded. That is also why the
+// static output directory must be an explicit, near-empty path — otherwise
+// Vercel serves the entire source tree (schema.sql, docs/security.md and all)
+// from the API domain. Both mistakes were made here once; both are cheap to
+// reintroduce, so both are checked.
+console.log('\n\x1b[1m3b. Vercel static output\x1b[0m');
+const vercelConfig = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
+
+if (vercelConfig.buildCommand === null || vercelConfig.buildCommand === undefined) {
+  fail('vercel.json leaves buildCommand unset; Vercel then auto-runs the package.json "build" script and then demands a public/ directory');
+} else if (vercelConfig.buildCommand === '') {
+  pass('vercel.json disables the build step (buildCommand: "")');
+} else {
+  pass(`vercel.json buildCommand: ${vercelConfig.buildCommand}`);
+}
+
+const outputDirectory = vercelConfig.outputDirectory;
+if (!outputDirectory) {
+  fail('vercel.json has no outputDirectory; Vercel publishes the repository root as static files, exposing schema.sql and docs/ on the API domain');
+} else if (!fs.existsSync(path.join(ROOT, outputDirectory))) {
+  fail(`vercel.json outputDirectory "${outputDirectory}" does not exist in the repository`);
+} else {
+  const entries = fs
+    .readdirSync(path.join(ROOT, outputDirectory), { withFileTypes: true })
+    .filter((e) => !e.name.startsWith('.'))
+    .map((e) => e.name);
+  if (entries.length === 0) pass(`outputDirectory "${outputDirectory}" exists and is empty`);
+  else fail(`outputDirectory "${outputDirectory}" would publish ${entries.join(', ')} on the API domain; it should hold nothing but dotfiles`);
+}
+
+// A CNAME only helps if the hostname it pins matches what the docs and .env
+// example tell operators to configure, or every cookie and CORS origin is off.
+const cnamePath = path.join(ROOT, 'apps', 'web', 'CNAME');
+if (fs.existsSync(cnamePath)) {
+  const cname = fs.readFileSync(cnamePath, 'utf8').trim();
+  const envText = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
+  const appUrl = (/^APP_URL=(.*)$/m.exec(envText) || [])[1]?.trim();
+  if (!cname) fail('apps/web/CNAME is empty');
+  else if (appUrl && new URL(appUrl).host !== cname) {
+    fail(`apps/web/CNAME is ${cname} but .env.example sets APP_URL=${appUrl}; the two must agree`);
+  } else {
+    pass(`apps/web/CNAME (${cname}) matches APP_URL (${appUrl})`);
+  }
+}
+
 // ─── 4. Frontend secret scan ─────────────────────────────────────────────────
 
 console.log('\n\x1b[1m4. Frontend secret scan\x1b[0m');

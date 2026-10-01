@@ -6,7 +6,7 @@
  * origins get no CORS headers at all, which makes the browser block the
  * response.
  *
- * Because the frontend (mail.re-el.co.za) and the API (api.mail.re-el.co.za)
+ * Because the frontend (mailer.re-el.co.za) and the API (api.mail.re-el.co.za)
  * share the registrable domain re-el.co.za, requests are same-*site*, so
  * `SameSite=Lax` cookies work and the strictest practical policy applies.
  */
