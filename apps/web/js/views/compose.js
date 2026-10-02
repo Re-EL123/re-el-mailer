@@ -8,7 +8,7 @@
 
 import { api } from '../api.js';
 import { clear, el, formatBytes, mount, toast } from '../ui.js';
-import { state } from '../store.js';
+import { activeMailbox, state } from '../store.js';
 import { navigate } from '../router.js';
 
 function recipientsField(label, key, form, { single = false } = {}) {

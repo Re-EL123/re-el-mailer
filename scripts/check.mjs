@@ -361,6 +361,22 @@ const unprecached = walk(path.join(WEB, 'js'), isJs)
 if (unprecached.length === 0) pass(`all ${precached.size} precached modules exist and every module is listed`);
 else for (const rel of unprecached) fail(`${rel} is not in the service worker precache list`);
 
+// ─── 7. No undefined identifiers ─────────────────────────────────────────────
+
+console.log('\n\x1b[1m7. ESLint (no-undef across app, API and scripts)\x1b[0m');
+{
+  const lint = spawnSync(process.execPath, [path.join(ROOT, 'node_modules', 'eslint', 'bin', 'eslint.js'), '.'], {
+    encoding: 'utf8',
+    cwd: ROOT,
+  });
+  if (lint.status === 0) {
+    pass('every identifier resolves; lint clean');
+  } else {
+    const output = `${lint.stdout || ''}${lint.stderr || ''}`.trim();
+    fail(`eslint reported problems (a missing import only fails at runtime):\n${output}`);
+  }
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(

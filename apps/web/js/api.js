@@ -149,14 +149,23 @@ async function refresh() {
 }
 
 /**
- * Call the API. On 401 (except for auth endpoints) refresh once and retry.
+ * Call the API. On 401 refresh once and retry.
+ *
+ * The refresh cookie is the only thing that survives a page load, since the
+ * access token lives in memory. That makes `?action=session` the one auth path
+ * that must attempt a refresh: a reload starts with no access token, so without
+ * it the bootstrap call 401s, nothing retries, and every refresh dumps the user
+ * back on the login screen despite a valid cookie. The remaining auth paths
+ * (login, logout, refresh, forgot-password) are excluded to avoid refreshing
+ * against a rejected password or in a loop.
  */
 export async function request(path, { method = 'GET', query, body, isForm = false, retry = true } = {}) {
   try {
     return await rawRequest(path, { method, query, body, isForm });
   } catch (err) {
+    const refreshable = path === '/auth' && query?.action === 'session';
     const isAuthPath = path.startsWith('/auth');
-    if (err.status === 401 && retry && !isAuthPath) {
+    if (err.status === 401 && retry && (!isAuthPath || refreshable)) {
       await refresh();
       return rawRequest(path, { method, query, body, isForm });
     }

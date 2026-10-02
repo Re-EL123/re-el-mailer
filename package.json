@@ -20,7 +20,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "node scripts/check.mjs",
-    "lint": "node scripts/check.mjs",
+    "lint": "eslint .",
     "create-admin": "node scripts/create-admin.mjs",
     "db:verify": "node scripts/verify-db.mjs",
     "db:check": "node scripts/db-check.mjs"
@@ -34,6 +34,8 @@
   },
   "devDependencies": {
     "embedded-postgres": "^18.4.0-beta.17",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
     "vercel": "39.2.2",
     "vitest": "3.0.6"
   },
