@@ -365,15 +365,20 @@ else for (const rel of unprecached) fail(`${rel} is not in the service worker pr
 
 console.log('\n\x1b[1m7. ESLint (no-undef across app, API and scripts)\x1b[0m');
 {
-  const lint = spawnSync(process.execPath, [path.join(ROOT, 'node_modules', 'eslint', 'bin', 'eslint.js'), '.'], {
-    encoding: 'utf8',
-    cwd: ROOT,
-  });
-  if (lint.status === 0) {
-    pass('every identifier resolves; lint clean');
+  // The Pages job runs this script with no `npm install`, so devDependencies are
+  // absent there. Treating a missing ESLint as a failure blocked every frontend
+  // deploy; the CI workflow installs them and is where the gate belongs.
+  const eslintBin = path.join(ROOT, 'node_modules', 'eslint', 'bin', 'eslint.js');
+  if (!fs.existsSync(eslintBin)) {
+    warn('eslint is not installed (devDependencies absent) — skipped; CI enforces this');
   } else {
-    const output = `${lint.stdout || ''}${lint.stderr || ''}`.trim();
-    fail(`eslint reported problems (a missing import only fails at runtime):\n${output}`);
+    const lint = spawnSync(process.execPath, [eslintBin, '.'], { encoding: 'utf8', cwd: ROOT });
+    if (lint.status === 0) {
+      pass('every identifier resolves; lint clean');
+    } else {
+      const output = `${lint.stdout || ''}${lint.stderr || ''}`.trim();
+      fail(`eslint reported problems (a missing import only fails at runtime):\n${output}`);
+    }
   }
 }
 
