@@ -8,6 +8,7 @@
  * Usage:
  *   npm run create-admin -- --email akani@re-el.co.za --name "Akani M"
  *   npm run create-admin -- --email akani@re-el.co.za --password 'S3cret!pass'
+ *   npm run create-admin -- akani@re-el.co.za
  *
  * With no --password a strong one is generated and printed once.
  */
@@ -22,6 +23,25 @@ function arg(name, fallback = undefined) {
   return fallback;
 }
 
+/**
+ * Accept a bare email as the first positional argument too.
+ *
+ * `npm run create-admin -- akani@re-el.co.za` is what everyone types first, and
+ * answering "An email is required" without saying so is a confusing dead end.
+ */
+function positionalEmail() {
+  const skip = (value) => ['--email', '--name', '--password'].includes(value);
+  for (let i = 2; i < process.argv.length; i += 1) {
+    const value = process.argv[i];
+    if (value.startsWith('--')) {
+      if (!skip(value)) i += 1;
+      continue;
+    }
+    if (value.includes('@')) return value;
+  }
+  return null;
+}
+
 async function main() {
   const { query, closePool } = await import('../packages/db/pool.js');
   const { createUser, findByEmail, updateUser } = await import('../packages/db/users.js');
@@ -31,12 +51,13 @@ async function main() {
   );
   const { mail: mailConfig } = await import('../packages/shared/config.js');
 
-  const email = (arg('email') || process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const email = (arg('email') || positionalEmail() || process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const displayName = (arg('name') || process.env.ADMIN_NAME || email.split('@')[0] || 'Administrator').trim();
   let password = arg('password') || process.env.ADMIN_PASSWORD || null;
 
   if (!email || !email.includes('@')) {
-    console.error('An email is required: --email you@re-el.co.za');
+    console.error('An email is required. Example:');
+    console.error('  npm run create-admin -- --email akani@re-el.co.za');
     process.exit(1);
   }
 
