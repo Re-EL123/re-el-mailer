@@ -123,10 +123,14 @@ export function applyTheme() {
  */
 function normalizeSession(data) {
   if (data?.session) return { ...data.session };
-  const expiresAt = Date.now() + Number(data?.expiresIn ?? 0) * 1000;
+  // `?action=session` deliberately returns no token: by then the client already
+  // holds a fresh one from the refresh that preceded it. Reporting null here and
+  // writing it back cleared that token, so the very next authenticated call went
+  // out with no Authorization header and 401'd.
+  const seconds = Number(data?.expiresIn);
   return {
     accessToken: data?.token ?? null,
-    expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+    expiresAt: Number.isFinite(seconds) && seconds > 0 ? Date.now() + seconds * 1000 : null,
     mustChangePassword: Boolean(data?.user?.mustChangePassword),
   };
 }
@@ -141,7 +145,9 @@ function normalizeSession(data) {
 export function adoptSession(data) {
   const mailboxes = data.mailboxes || [];
   const session = normalizeSession(data);
-  setAccessToken(session.accessToken);
+  // Never clear a token we already hold: a payload that carries none (the
+  // ?action=session response) must leave the existing one in place.
+  if (session.accessToken) setAccessToken(session.accessToken);
   setState({
     user: data.user,
     session,

@@ -48,6 +48,17 @@ beforeEach(() => {
   };
 });
 
+/** Exactly what ?action=session returns: identity, no token, no expiry. */
+function sessionPayload() {
+  return {
+    user: { id: 'usr_1', email: 'admin@re-el.co.za', role: 'admin', mustChangePassword: true },
+    mailbox: { id: 'mbx_1', email: 'admin@re-el.co.za' },
+    mailboxes: [{ id: 'mbx_1', email: 'admin@re-el.co.za' }],
+    sessionId: 'ses_1',
+    issuedAt: '2026-10-02T09:00:00.000Z',
+  };
+}
+
 describe('session restore after a reload', () => {
   it('refreshes the cookie and retries when the session call 401s', async () => {
     fetchMock
@@ -78,6 +89,44 @@ describe('session restore after a reload', () => {
     for (const [, init] of fetchMock.mock.calls) {
       expect(init.credentials).toBe('include');
     }
+  });
+
+  it('keeps the refreshed token when ?action=session returns none', async () => {
+    // This is the production sequence that produced a 401 on change-password:
+    // refresh() obtained a token, then the session call answered with identity
+    // only and adoptSession wrote null over it, so the next authenticated
+    // request went out with no Authorization header.
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { ok: false, error: { code: 'AUTH_REQUIRED' } }))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        ok: true,
+        data: { token: 'token_new', expiresIn: 900, user: sessionPayload().user, mailboxes: sessionPayload().mailboxes },
+      }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true, data: sessionPayload() }))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true, data: { changed: true } }));
+
+    const { api } = await loadApi();
+    // The real boot path: store.loadSession() feeds the payload into
+    // adoptSession(), which is where the token was being clobbered. Calling the
+    // API directly would skip the very code under test.
+    const store = await import('../apps/web/js/store.js');
+    const data = await api.auth.session();
+    store.adoptSession(data);
+
+    expect(data.sessionId).toBe('ses_1');
+    // No token in the payload, so the one from refresh must survive.
+    await api.auth.changePassword({ currentPassword: 'x', newPassword: 'y' });
+    const lastCall = fetchMock.mock.calls.at(-1);
+    expect(lastCall[1].headers.Authorization).toBe('Bearer token_new');
+  });
+
+  it('does not invent an expiry when the payload carries no expiresIn', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true, data: sessionPayload() }));
+    const { api } = await loadApi();
+    const data = await api.auth.session();
+    // expiresIn is absent, so a Date.now() + 0 calculation would report a token
+    // that expired the instant it was issued.
+    expect(data.expiresIn).toBeUndefined();
   });
 
   it('attempts one refresh, then gives up, when the cookie is absent', async () => {
