@@ -67,6 +67,22 @@ If the variables are already on the Vercel project, skip the copy entirely:
 npm run db:migrate:vercel
 ```
 
+If a connection is rejected with `password authentication failed`, verify the
+password before editing Vercel again — each edit-and-redeploy cycle costs minutes
+and can leave a wrong password in the dashboard:
+
+```bash
+read -rs PASSWORD && printf '%s' "$PASSWORD" | npm run db:check -- --pull --stdin; unset PASSWORD
+```
+
+This connects once and reports whether the password is accepted, without touching
+Vercel. The password is read from stdin, so it never enters argv or shell history,
+and it is never printed or logged. The common mistake is substituting the Supabase
+**account login** password: the connection strings need the **database** password,
+which is a separate secret (Supabase → Settings → Database → Database password).
+Special characters are encoded for you; if the value contains `@ : / ? # % & [ ]`,
+use the strings copied straight from the dashboard.
+
 `create-admin` and `db:seed` accept `--pull` for the same reason, so the whole
 provisioning sequence runs without a local `.env` holding production secrets:
 

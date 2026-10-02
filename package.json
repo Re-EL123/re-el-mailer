@@ -22,7 +22,8 @@
     "typecheck": "node scripts/check.mjs",
     "lint": "node scripts/check.mjs",
     "create-admin": "node scripts/create-admin.mjs",
-    "db:verify": "node scripts/verify-db.mjs"
+    "db:verify": "node scripts/verify-db.mjs",
+    "db:check": "node scripts/db-check.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.57.4",
