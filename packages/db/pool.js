@@ -34,12 +34,32 @@ let pool = null;
 
 // ─── Pool ────────────────────────────────────────────────────────────────────
 
+/**
+ * Connection string with any sslmode stripped.
+ *
+ * `sslmode` in the connection string takes precedence over the `ssl` option
+ * passed alongside it, so a URL ending in `?sslmode=disable` silently connects
+ * in plaintext — DATABASE_SSL=true and all. Stripping it means TLS is decided
+ * here, by configuration, instead of by whatever a dashboard or guide appended
+ * to the URL.
+ *
+ * `pgbouncer=true`, `connection_limit` and friends are left alone: node-postgres
+ * ignores the ones it does not know, and Supabase's pooled URLs carry them.
+ */
+export function connectionStringWithoutSslMode(url = database.url()) {
+  const stripped = String(url).replace(/([?&])sslmode=[^&#]*/gi, (match, sep) =>
+    sep === '?' ? '?' : '',
+  );
+  // …and drop a now-empty trailing '?' or '&'.
+  return stripped.replace(/[?&]+$/, '').replace(/\?&/, '?');
+}
+
 /** Lazily construct the pool. Throws AppError if DATABASE_URL is missing. */
 export function getPool() {
   if (pool) return pool;
 
   pool = new Pool({
-    connectionString: database.url(),
+    connectionString: connectionStringWithoutSslMode(),
     ssl: database.ssl ? { rejectUnauthorized: database.rejectUnauthorized } : undefined,
     max: database.maxConnections,
     idleTimeoutMillis: database.idleTimeoutMs,

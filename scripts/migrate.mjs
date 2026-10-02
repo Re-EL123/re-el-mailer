@@ -26,7 +26,7 @@ const SCHEMA = path.join(REPO_ROOT, 'database', 'schema.sql');
 const MIGRATIONS_DIR = path.join(REPO_ROOT, 'database', 'migrations');
 
 async function main() {
-  const { closePool } = await import('../packages/db/pool.js');
+  const { closePool, connectionStringWithoutSslMode } = await import('../packages/db/pool.js');
   const { default: pg } = await import('pg');
   const Client = typeof pg === 'function' ? pg : pg.Client;
 
@@ -39,7 +39,7 @@ async function main() {
     process.exit(1);
   }
   const client = new Client({
-    connectionString,
+    connectionString: connectionStringWithoutSslMode(connectionString),
     ...(wantSsl
       ? { ssl: { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'true' } }
       : null),

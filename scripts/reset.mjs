@@ -42,10 +42,11 @@ console.log('This will DROP and recreate the public schema.');
 async function main() {
   const { default: pg } = await import('pg');
   const Client = typeof pg === 'function' ? pg : pg.Client;
+  const { connectionStringWithoutSslMode } = await import('../packages/db/pool.js');
   // Mirror the pool's TLS settings; a remote Supabase database rejects non-SSL.
   const wantSsl = process.env.DATABASE_SSL !== 'false';
   const client = new Client({
-    connectionString: url,
+    connectionString: connectionStringWithoutSslMode(url),
     ...(wantSsl
       ? { ssl: { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'true' } }
       : null),
