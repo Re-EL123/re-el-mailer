@@ -1,13 +1,31 @@
 /**
  * Service worker.
  *
- * The API is a separate origin and is never cached — mail must always be
- * fetched live so a stale list can't be shown. Only the static app shell
- * (HTML/CSS/JS/icons) is pre-cached, and navigations fall back to the cached
- * shell when the network is unavailable.
+ * The API is a separate origin and is never cached — mail must always be fetched
+ * live so a stale list can't be shown. Only the static app shell (HTML/CSS/JS/
+ * icons) is cached, and it is served network-first with the cache as the offline
+ * fallback.
+ *
+ * Two properties of the previous version were actively harmful, and both
+ * presented as "my fix deployed but nothing changed":
+ *
+ *   - The cache name was a hand-written constant that never changed between
+ *     deploys, so nothing ever evicted the previous build. A returning visitor
+ *     was served the old files indefinitely.
+ *   - Stale-while-revalidate returns the cached copy first and refreshes in the
+ *     background. Even with correct cache busting, every deploy serves the
+ *     previous build to the first visitor — for an authenticated mail client that
+ *     means running code that disagrees with the API, which is how a fix can look
+ *     deployed and still not be running.
+ *
+ * So the cache name is derived from the shell's own contents: changing any file
+ * yields a new name, with no build step and no constant to remember to bump.
+ * Shell files are then fetched network-first, so a visitor never runs code older
+ * than the deployment they just loaded, and the precache remains only as the
+ * offline fallback.
  */
 
-const VERSION = 're-el-mailer-v1';
+const CACHE_PREFIX = 're-el-mailer-';
 const SHELL = [
   './',
   './index.html',
@@ -31,18 +49,60 @@ const SHELL = [
   './assets/icon-512.png',
 ];
 
+/** Resolve against the worker script so cache keys are absolute, as matching requires. */
+const absolute = (path) => new URL(path, self.location.href).toString();
+
+/** Fetch every shell file once, keeping the response and its bytes. */
+async function fetchShell() {
+  return Promise.all(
+    SHELL.map(async (path) => {
+      // `reload` bypasses the HTTP cache, or a stale CDN copy would hash into the
+      // new version name and defeat the point.
+      const response = await fetch(new Request(absolute(path), { cache: 'reload' }));
+      if (!response.ok) throw new Error(`shell asset ${path} returned ${response.status}`);
+      return { url: absolute(path), response, body: await response.clone().arrayBuffer() };
+    }),
+  );
+}
+
+/** Name the cache after the shell's contents, so any change busts it. */
+async function versionFor(entries) {
+  let size = 0;
+  for (const entry of entries) size += entry.body.byteLength;
+  const merged = new Uint8Array(size);
+  let offset = 0;
+  for (const entry of entries) {
+    merged.set(new Uint8Array(entry.body), offset);
+    offset += entry.body.byteLength;
+  }
+  const digest = await crypto.subtle.digest('SHA-256', merged);
+  const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${CACHE_PREFIX}${hex.slice(0, 16)}`;
+}
+
+/** Set during install and read by activate and fetch; same worker instance. */
+let currentVersion = null;
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(VERSION).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()),
+    (async () => {
+      const entries = await fetchShell();
+      currentVersion = await versionFor(entries);
+      const cache = await caches.open(currentVersion);
+      await Promise.all(entries.map(({ url, response }) => cache.put(url, response)));
+      await self.skipWaiting();
+    })(),
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== VERSION).map((key) => caches.delete(key))))
-      .then(() => self.clients.claim()),
+    (async () => {
+      // Everything not carrying the current contents is a previous deploy.
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((key) => key !== currentVersion).map((key) => caches.delete(key)));
+      await self.clients.claim();
+    })(),
   );
 });
 
@@ -55,27 +115,27 @@ self.addEventListener('fetch', (event) => {
   // Never cache API traffic — it is authenticated and must stay live.
   if (url.pathname.startsWith('/api') || url.origin !== self.location.origin) return;
 
-  // Navigations: network-first, fall back to the cached shell when offline.
-  if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request).catch(() => caches.match('./index.html').then((hit) => hit || Response.error())),
-    );
-    return;
-  }
+  const fromCache = async () => {
+    const hit = await caches.match(request);
+    if (hit) return hit;
+    if (request.mode === 'navigate') {
+      const shell = await caches.match(absolute('./index.html'));
+      if (shell) return shell;
+    }
+    return Response.error();
+  };
 
-  // Static assets: stale-while-revalidate.
+  // Network-first for the shell. Staleness here is not a cosmetic risk: the app
+  // and the API would disagree, and the resulting bugs read as server faults.
   event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(VERSION).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        })
-        .catch(() => cached);
-      return cached || network;
-    }),
+    fetch(request)
+      .then((response) => {
+        if (response.ok && currentVersion) {
+          const copy = response.clone();
+          caches.open(currentVersion).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      })
+      .catch(fromCache),
   );
 });
