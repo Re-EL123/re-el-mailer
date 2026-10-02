@@ -14,8 +14,10 @@
  */
 
 import { loadEnvFile } from '../packages/shared/dotenv.js';
+import { pullFromVercel } from './lib/vercel-env.js';
 
-loadEnvFile();
+if (process.argv.includes('--pull')) pullFromVercel({ label: 'seeding' });
+else loadEnvFile();
 
 const DEMO = process.argv.includes('--demo');
 

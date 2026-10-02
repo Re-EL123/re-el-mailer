@@ -67,7 +67,15 @@ If the variables are already on the Vercel project, skip the copy entirely:
 npm run db:migrate:vercel
 ```
 
-That pulls the production environment from Vercel, uses `DIRECT_URL`, and deletes
+`create-admin` and `db:seed` accept `--pull` for the same reason, so the whole
+provisioning sequence runs without a local `.env` holding production secrets:
+
+```bash
+npm run db:migrate:vercel
+npm run create-admin -- --pull --email admin@re-el.co.za
+```
+
+`db:migrate:vercel` pulls the production environment from Vercel, uses `DIRECT_URL`, and deletes
 the pulled file afterwards — it contains every production secret, not just the
 database URL. It is the most reliable route precisely because nothing is retyped:
 the usual failure is a connection string pasted with the literal `[YOUR-PASSWORD]`
@@ -89,7 +97,7 @@ npm run db:verify
 5. Create the first admin:
 
 ```bash
-npm run create-admin -- admin@re-el.co.za
+npm run create-admin -- --pull --email admin@re-el.co.za
 ```
 
 It prints a temporary password; the account is flagged `must_change_password`.
@@ -97,8 +105,8 @@ It prints a temporary password; the account is flagged `must_change_password`.
 6. Optionally seed reference data and demo mail:
 
 ```bash
-npm run db:seed
-npm run db:seed -- --demo
+npm run db:seed -- --pull
+npm run db:seed -- --pull --demo
 ```
 
 ### Storage

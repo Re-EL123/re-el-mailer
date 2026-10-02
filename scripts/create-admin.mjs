@@ -9,13 +9,21 @@
  *   npm run create-admin -- --email akani@re-el.co.za --name "Akani M"
  *   npm run create-admin -- --email akani@re-el.co.za --password 'S3cret!pass'
  *   npm run create-admin -- akani@re-el.co.za
+ *   npm run create-admin -- --pull --email akani@re-el.co.za
  *
  * With no --password a strong one is generated and printed once.
  */
 
 import { loadEnvFile, REPO_ROOT } from '../packages/shared/dotenv.js';
+import { pullFromVercel } from './lib/vercel-env.js';
 
-loadEnvFile();
+// --pull reads DATABASE_URL from the Vercel project, so provisioning an admin
+// does not require hand-copying a password-bearing connection string into a
+// local .env first. Without it the next failure is the misleading
+// "Missing environment variable DATABASE_URL" while DATABASE_URL is in fact
+// configured in Vercel.
+if (process.argv.includes('--pull')) pullFromVercel({ label: 'admin provisioning' });
+else loadEnvFile();
 
 function arg(name, fallback = undefined) {
   const index = process.argv.indexOf(`--${name}`);
