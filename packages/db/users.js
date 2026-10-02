@@ -38,6 +38,23 @@ export async function findPublicById(id, db = DEFAULT_POOL) {
   return findById(id, db);
 }
 
+/**
+ * Load the stored credential for a user id, hash included.
+ *
+ * `findById` omits `password_hash` on purpose so an ordinary lookup can never
+ * carry it, but an endpoint that must compare a submitted password has no other
+ * way in — the session's user row is the public projection, so reading the hash
+ * off it compares against `undefined` and rejects every password. Naming the
+ * opt-in separately keeps the default narrow instead of widening every call.
+ */
+export async function findCredentialById(id, db = DEFAULT_POOL) {
+  if (!id) return null;
+  return db.queryOne(
+    `select ${PUBLIC_COLUMNS}, password_hash from public.users where id = $1`,
+    [id],
+  );
+}
+
 export async function listUsers({ status, role, search, limit = 100, offset = 0 } = {}, db = DEFAULT_POOL) {
   const conditions = [];
   const params = [];

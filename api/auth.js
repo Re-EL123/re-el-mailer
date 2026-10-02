@@ -29,6 +29,7 @@ import { findMailboxById, listMailboxesForUser } from '../packages/db/mailboxes.
 import {
   createPasswordReset,
   findByEmail,
+  findCredentialById,
   findPasswordResetByHash,
   recordFailedLogin,
   recordLogin,
@@ -360,11 +361,19 @@ export const actions = {
       handler: async (ctx) => {
         const { user } = ctx.session;
 
-        const valid = await verifyPassword(ctx.body.currentPassword, user.password_hash);
+        // The session carries the public user projection, which has no
+        // password_hash. Comparing against it meant comparing bcrypt against
+        // undefined, so every correct password was reported as incorrect.
+        const credential = await findCredentialById(user.id);
+        if (!credential) {
+          throw new AppError(Codes.AUTH_REQUIRED, 'Your session is no longer valid.', 401);
+        }
+
+        const valid = await verifyPassword(ctx.body.currentPassword, credential.password_hash);
         if (!valid) {
           throw new AppError(Codes.AUTH_INVALID, 'Your current password is not correct.', 400);
         }
-        if (await verifyPassword(ctx.body.newPassword, user.password_hash)) {
+        if (await verifyPassword(ctx.body.newPassword, credential.password_hash)) {
           throw new AppError(Codes.VALIDATION_ERROR, 'Choose a password you have not used before.', 400);
         }
 
