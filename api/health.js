@@ -70,12 +70,17 @@ export default createHandler({
         const startedAt = Date.now();
         let databaseOk = true;
         let latencyMs = null;
+        let databaseError = null;
         try {
           const t0 = Date.now();
           await query('select 1');
           latencyMs = Date.now() - t0;
-        } catch {
+        } catch (err) {
           databaseOk = false;
+          // Admin-only, so the reason is safe to return — and necessary:
+          // "degraded" alone cannot distinguish an unset variable, a bad
+          // password, a refused TLS handshake or a wrong host.
+          databaseError = err?.code || err?.message || String(err);
         }
 
         const storage = await storageHealth();
@@ -88,7 +93,7 @@ export default createHandler({
           uptimeSeconds: Math.round(process.uptime()),
           checkedInMs: Date.now() - startedAt,
           checks: {
-            database: { ok: databaseOk, latencyMs },
+            database: { ok: databaseOk, latencyMs, error: databaseError },
             storage: { ok: storage.ok, bucket: storage.bucket, error: storage.error },
             resend: { ok: resendConfigured, configured: resendConfigured },
             webhooks: { inbound: inboundConfigured, events: eventConfigured },

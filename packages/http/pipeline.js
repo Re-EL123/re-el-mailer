@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { app } from '../shared/config.js';
+import { app, assertProductionConfig, env } from '../shared/config.js';
 import { AppError, Codes, toAppError } from '../shared/errors.js';
 import { logger } from '../shared/logger.js';
 import { applyCors, handlePreflight } from './cors.js';
@@ -64,6 +64,49 @@ export function createHandler({ name, actions, defaultAction = null, audit = {} 
     const requestId = randomUUID();
     const startedAt = Date.now();
     const actionName = String(req.query?.action || defaultAction || '').trim();
+
+    // A missing variable must name itself. Without this, `?action=ping` catches
+    // the failure and reports a bare "degraded", so an unset DATABASE_URL looks
+    // identical to bad credentials or a TLS problem — all indistinguishable
+    // from outside the deployment. `assertProductionConfig` was written for
+    // this and never called.
+    if (env.isProduction) {
+      const { missing, weakSecret } = assertProductionConfig();
+      if (missing.length > 0) {
+        logger.error('Refusing to serve: missing configuration', { fn: name, missing });
+        sendJson(
+          res,
+          500,
+          {
+            ok: false,
+            error: {
+              code: 'SERVER_MISCONFIGURED',
+              message: `Missing environment variable: ${missing.join(', ')}.`,
+            },
+            requestId,
+          },
+          { requestId },
+        );
+        return;
+      }
+      if (weakSecret) {
+        logger.error('Refusing to serve: weak JWT_SECRET', { fn: name });
+        sendJson(
+          res,
+          500,
+          {
+            ok: false,
+            error: {
+              code: 'SERVER_MISCONFIGURED',
+              message: 'JWT_SECRET must be at least 32 characters.',
+            },
+            requestId,
+          },
+          { requestId },
+        );
+        return;
+      }
+    }
 
     const context = {
       requestId,
