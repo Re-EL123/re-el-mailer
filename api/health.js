@@ -50,13 +50,23 @@ export default createHandler({
       handler: async () => {
         // The database is the only dependency whose absence makes the API
         // useless; storage and the provider are reported through /status.
+        //
+        // An unset variable never reaches this handler: the pipeline refuses to
+        // serve in production and names the variable. So a failure here is a
+        // genuine connectivity problem, and saying so is what lets an uptime
+        // check tell "the database is down" apart from "this is not deployed".
         let ok = true;
         try {
           await query('select 1');
         } catch {
           ok = false;
         }
-        return { ok, status: ok ? 'healthy' : 'degraded', time: new Date().toISOString() };
+        return {
+          ok,
+          status: ok ? 'healthy' : 'degraded',
+          ...(ok ? {} : { reason: 'database_unreachable' }),
+          time: new Date().toISOString(),
+        };
       },
     },
 
