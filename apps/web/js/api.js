@@ -130,7 +130,11 @@ async function refresh() {
     refreshPromise = (async () => {
       try {
         const data = await rawRequest('/auth', { method: 'POST', query: { action: 'refresh' } });
-        accessToken = data.session.accessToken;
+        // buildSessionPayload() returns `token`; only an older API nested it.
+        accessToken = data?.session?.accessToken ?? data?.token ?? null;
+        if (!accessToken) {
+          throw new ApiError('AUTH_INVALID', 'The session could not be refreshed.');
+        }
         return data;
       } catch (err) {
         accessToken = null;

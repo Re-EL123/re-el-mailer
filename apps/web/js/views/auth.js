@@ -74,7 +74,10 @@ function loginView(container) {
       // Install the token and mailboxes before routing: the mail routes are
       // guarded on `state.user`, so navigating first bounces straight back here.
       adoptSession(data);
-      if (data.session?.mustChangePassword) {
+      // Read from state, not the raw response: the API reports the flag on the
+      // user, so `data.session?.mustChangePassword` was always undefined and the
+      // forced password change was skipped for a temporary-password account.
+      if (state.session?.mustChangePassword) {
         // Still show the auth surface for the password gate.
         notifySignedIn({ forcePasswordChange: true });
         navigate('change-password', { replace: true });

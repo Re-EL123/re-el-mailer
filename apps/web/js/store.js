@@ -109,6 +109,29 @@ export function applyTheme() {
 }
 
 /**
+ * Normalise a session payload from the API.
+ *
+ * `buildSessionPayload()` returns `token`, `expiresIn` and `refreshExpiresAt` at
+ * the top level with `mustChangePassword` on the user. An earlier client assumed
+ * a nested `session: { accessToken, expiresAt, mustChangePassword }`, so sign-in
+ * threw a TypeError on `data.session.accessToken` and reported a generic failure
+ * for a login that had actually succeeded.
+ *
+ * Both shapes are accepted: the frontend on GitHub Pages and the API on Vercel
+ * deploy independently, so a cached service worker can outlive a contract change
+ * in either direction.
+ */
+function normalizeSession(data) {
+  if (data?.session) return { ...data.session };
+  const expiresAt = Date.now() + Number(data?.expiresIn ?? 0) * 1000;
+  return {
+    accessToken: data?.token ?? null,
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+    mustChangePassword: Boolean(data?.user?.mustChangePassword),
+  };
+}
+
+/**
  * Adopt an already-fetched session payload.
  *
  * Both `loadSession()` and the sign-in form land here, so the token, user,
@@ -117,10 +140,11 @@ export function applyTheme() {
  */
 export function adoptSession(data) {
   const mailboxes = data.mailboxes || [];
-  setAccessToken(data.session.accessToken);
+  const session = normalizeSession(data);
+  setAccessToken(session.accessToken);
   setState({
     user: data.user,
-    session: data.session,
+    session,
     mailboxes,
     activeMailboxId:
       state.activeMailboxId && mailboxes.some((mb) => mb.id === state.activeMailboxId)
