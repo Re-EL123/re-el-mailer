@@ -136,23 +136,14 @@ async function establishSession(ctx, { user, mailbox, ttlDays }) {
   return buildSessionPayload({ ...pair, user, mailbox, mailboxes });
 }
 
-export default createHandler({
-  name: 'auth',
-  audit: {
-    login: {
-      action: 'auth.login',
-      entityType: 'user',
-      entityId: (data) => data?.user?.id ?? null,
-      metadata: (data, ctx) => ({ mailbox: data?.mailbox?.email ?? null, ip: ctx.ip }),
-    },
-    logout: { action: 'auth.logout', entityType: 'user' },
-    'change-password': { action: 'auth.password_changed', entityType: 'user' },
-    'revoke-session': { action: 'auth.session_revoked', entityType: 'session' },
-  },
-
-  actions: {
-    // ── Sign in ─────────────────────────────────────────────────────────────
-    login: {
+/**
+ * Exported so the handlers can be unit tested directly. createHandler() closes
+ * over this map, so without the export there is no seam: a wrong branch in a
+ * login path can only be discovered by deploying and signing in by hand.
+ */
+export const actions = {
+  // ── Sign in ─────────────────────────────────────────────────────────────
+  login: {
       method: 'POST',
       body: 'json',
       schema: loginSchema,
@@ -198,6 +189,11 @@ export default createHandler({
         // routes them to the change-password screen and blocks everything else.
         if (account.must_change_password) {
           const payload = await establishSession(ctx, { user: account, mailbox: null, ttlDays });
+          // Record the login here too. This branch returned before
+          // recordLogin(), so an account on a temporary password — which is what
+          // create-admin produces — accumulated sessions while last_login_at
+          // stayed null, making "never signed in" the permanent answer in admin.
+          await recordLogin(account.id);
           ctx.log.info('Signed in with a forced password change', { userId: account.id });
           return { ...payload, mustChangePassword: true };
         }
@@ -447,5 +443,20 @@ export default createHandler({
         return { revoked: true, wasCurrent: id === ctx.session.sessionId };
       },
     },
+};
+
+export default createHandler({
+  name: 'auth',
+  audit: {
+    login: {
+      action: 'auth.login',
+      entityType: 'user',
+      entityId: (data) => data?.user?.id ?? null,
+      metadata: (data, ctx) => ({ mailbox: data?.mailbox?.email ?? null, ip: ctx.ip }),
+    },
+    logout: { action: 'auth.logout', entityType: 'user' },
+    'change-password': { action: 'auth.password_changed', entityType: 'user' },
+    'revoke-session': { action: 'auth.session_revoked', entityType: 'session' },
   },
+  actions,
 });
