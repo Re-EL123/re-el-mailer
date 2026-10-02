@@ -20,11 +20,12 @@
       // cross-origin URL: a same-origin '/api' would resolve against the Pages
       // host, which has no functions and returns 404 for every call.
       //
-      // Local development serves both through scripts/serve-web.mjs, which
-      // proxies /api to the local handler, and can override this with
-      // ?api=http://localhost:3000 for a separately started API.
+      // Vercel mounts api/ under /api, so the path is part of the base. Omit it
+      // and every request 404s — which the browser then reports as a CORS
+      // error, not a routing mistake. api.js normalises the value anyway, so
+      // the ?api= override below accepts either form.
       window.__REEL_CONFIG__ = {
-        apiBase: 'https://api.mail.re-el.co.za',
+        apiBase: 'https://api.mail.re-el.co.za/api',
       };
       // Same-origin proxy path: only when the page is served locally.
       if (['localhost', '127.0.0.1'].includes(location.hostname)) {

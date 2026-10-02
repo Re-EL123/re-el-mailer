@@ -154,12 +154,18 @@ as a bearer token automatically.
    asset references resolve.
 2. `apps/web/CNAME` already pins `mailer.re-el.co.za`, so Pages serves the custom
    domain once the CNAME record exists. Add a second hostname as an extra CNAME line if needed.
-3. The API origin is set in `apps/web/index.html` via `window.__REEL_CONFIG__.apiBase`
-   and defaults to `https://api.mail.re-el.co.za`, which is correct for this split
+3. The API base is set in `apps/web/index.html` via `window.__REEL_CONFIG__.apiBase`
+   and defaults to `https://api.mail.re-el.co.za/api`, which is correct for this split
    deployment. It only falls back to the same-origin `/api` path when the page is
    served from `localhost`/`127.0.0.1`, where `scripts/serve-web.mjs` proxies the
-   functions. Change it if the API is hosted elsewhere; a same-origin `/api` on
-   Pages has no functions behind it and every request will 404.
+   functions. Change the host if the API is hosted elsewhere.
+
+   Keep the `/api` path. Vercel mounts everything in `api/` under `/api`, so a base of
+   `https://api.mail.re-el.co.za` alone makes every request 404 — and because an edge
+   404 carries no CORS headers, the browser reports it as *"Access-Control-Allow-Origin
+   missing"*, which looks like an `ALLOWED_ORIGINS` problem rather than a routing one.
+   `api.js` normalises the value, so `?api=http://localhost:3000` works with or without
+   the path, and `tests/api-base.test.js` fails if the default loses it.
 4. The service worker only registers on `https:` — expected, and required for Pages.
 
 ## 6. Post-deploy verification

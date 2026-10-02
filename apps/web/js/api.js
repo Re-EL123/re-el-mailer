@@ -15,7 +15,22 @@
  */
 
 const config = (typeof window !== 'undefined' && window.__REEL_CONFIG__) || {};
-const API_BASE = (config.apiBase || '/api').replace(/\/$/, '');
+
+/**
+ * Vercel serves everything in api/ under /api, so the base must end there.
+ *
+ * Normalising in one place means an override like ?api=http://localhost:3000
+ * still works. Left unnormalised, every request 404s at the edge — and the
+ * browser reports a missing-path 404 as a CORS failure, which sends you
+ * hunting through ALLOWED_ORIGINS instead of the one-character fix.
+ */
+function normaliseApiBase(value) {
+  const trimmed = String(value ?? '/api').trim().replace(/\/+$/, '');
+  if (!trimmed) return '/api';
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+}
+
+const API_BASE = normaliseApiBase(config.apiBase);
 
 let accessToken = null;
 let refreshPromise = null;

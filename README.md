@@ -62,10 +62,11 @@ All server configuration is read from the environment via `packages/shared/confi
 which fails fast on missing/invalid values in production. See `.env.example` for the
 full list and `docs/deployment.md` for the production values.
 
-The frontend reads its API origin from `window.__REEL_CONFIG__.apiBase`, set inline in
-`apps/web/index.html`. It is `/api` by default (correct for the dev proxy and for a
-single-origin deployment); point it at `https://api.mail.re-el.co.za` when the frontend
-and API are on different origins.
+The frontend reads its API base from `window.__REEL_CONFIG__.apiBase`, set inline in
+`apps/web/index.html`. It defaults to `https://api.mail.re-el.co.za/api` for this split
+deployment, and to `/api` when served from localhost, where the dev proxy forwards it.
+The trailing `/api` is the Vercel mount point for `api/` — without it every request 404s
+and the browser misreports that as a CORS failure.
 
 ## Documentation
 
