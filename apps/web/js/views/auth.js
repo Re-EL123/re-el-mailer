@@ -3,7 +3,7 @@
  * "change your password" gate shown after an admin provisions an account.
  */
 
-import { api, ApiError } from '../api.js';
+import { api, ApiError, describeApiError } from '../api.js';
 import { el, mount, toast } from '../ui.js';
 import { state, setState, adoptSession, saveTheme } from '../store.js';
 import { navigate } from '../router.js';
@@ -28,8 +28,7 @@ function errorBox() {
 }
 
 function showError(box, err) {
-  const message = err instanceof ApiError ? err.message : 'Something went wrong. Please try again.';
-  box.textContent = message;
+  box.textContent = describeApiError(err);
   box.hidden = false;
 }
 
@@ -176,7 +175,15 @@ function resetView(container, ctx) {
 function changePasswordView(container) {
   const box = errorBox();
   const current = el('input', { type: 'password', required: true, autocomplete: 'current-password' });
-  const next = el('input', { type: 'password', required: true, autocomplete: 'new-password' });
+  // The server requires 10+ characters; enforcing it here avoids a round trip
+  // that used to end in an unexplained generic validation message.
+  const next = el('input', {
+    type: 'password',
+    required: true,
+    minlength: 10,
+    maxlength: 72,
+    autocomplete: 'new-password',
+  });
   const submit = el('button', { class: 'btn btn-primary btn-block', type: 'submit', text: 'Update password' });
 
   const form = el(
@@ -185,6 +192,7 @@ function changePasswordView(container) {
     el('p', { class: 'muted', text: 'You must change your temporary password before continuing.' }),
     field('Current password', current),
     field('New password', next),
+    el('p', { class: 'muted', text: 'At least 10 characters.' }),
     box,
     submit,
   );

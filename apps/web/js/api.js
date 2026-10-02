@@ -72,6 +72,26 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Best user-facing message for a failure.
+ *
+ * A schema rejection arrives as VALIDATION_ERROR: `message` is the generic
+ * "Some of the details provided are not valid." while the actionable reasons sit
+ * in `details` as { field, message }. Displaying `message` alone told someone
+ * failing the forced password change that details were invalid without naming
+ * the field or the rule, even though the reason was on the wire the whole time.
+ *
+ * Prefers those specifics, and falls back to `message` for every other failure.
+ */
+export function describeApiError(err) {
+  if (!(err instanceof ApiError)) return 'Something went wrong. Please try again.';
+  const specifics = (Array.isArray(err.details) ? err.details : [])
+    .map((issue) => (typeof issue?.message === 'string' ? issue.message.trim() : ''))
+    .filter(Boolean);
+  if (specifics.length > 0) return specifics.join(' ');
+  return err.message || 'Something went wrong. Please try again.';
+}
+
 function buildUrl(path, query) {
   const url = new URL(API_BASE + path, window.location.origin);
   for (const [key, value] of Object.entries(query || {})) {
