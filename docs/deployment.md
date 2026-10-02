@@ -44,7 +44,7 @@ apart, but that check only covers *presence*, not semantics. Two worth calling o
 - `MAIL_DOMAINS` must match the domains registered in the admin console. It is the
   first thing to check if a new domain's mail is rejected.
 
-`npm run reset` is guarded by the `--yes` flag rather than an environment variable.
+`npm run db:reset` is guarded by the `--yes` flag rather than an environment variable.
 
 Because the API and frontend are on different origins, `ALLOWED_ORIGINS` must list the
 frontend origin exactly, and the CORS layer must allow credentials so the `httpOnly`
@@ -58,10 +58,22 @@ refresh cookie travels. The frontend always sends `credentials: 'include'`.
 3. Run migrations against the *direct* connection:
 
 ```bash
-DIRECT_URL=postgres://...@db.<ref>.supabase.co:5432/postgres npm run migrate
+DIRECT_URL=postgres://...@db.<ref>.supabase.co:5432/postgres npm run db:migrate
 ```
 
-`npm run migrate` prefers `DIRECT_URL` and only falls back to `DATABASE_URL`. This is
+If the variables are already on the Vercel project, skip the copy entirely:
+
+```bash
+npm run db:migrate:vercel
+```
+
+That pulls the production environment from Vercel, uses `DIRECT_URL`, and deletes
+the pulled file afterwards — it contains every production secret, not just the
+database URL. It is the most reliable route precisely because nothing is retyped:
+the usual failure is a connection string pasted with the literal `[YOUR-PASSWORD]`
+placeholder still in it. Requires `vercel login` and `vercel link`.
+
+`npm run db:migrate` prefers `DIRECT_URL` and only falls back to `DATABASE_URL`. This is
 not cosmetic: `schema.sql` issues `create extension`, `create policy` and
 `alter table … enable row level security`, and the transaction pooler multiplexes
 statements over a single backend connection, so DDL run through it can fail or apply
@@ -85,8 +97,8 @@ It prints a temporary password; the account is flagged `must_change_password`.
 6. Optionally seed reference data and demo mail:
 
 ```bash
-npm run seed
-npm run seed -- --demo
+npm run db:seed
+npm run db:seed -- --demo
 ```
 
 ### Storage
@@ -196,4 +208,4 @@ Then confirm, in the browser:
 The API is stateless, so a rollback is redeploying the previous commit. Database changes
 are forward-only; take a Supabase backup before migrating, and note that
 `schema_migrations` prevents a rolled-back migration from re-running automatically —
-check `npm run migrate` output if a migration needs to be reapplied deliberately.
+check `npm run db:migrate` output if a migration needs to be reapplied deliberately.

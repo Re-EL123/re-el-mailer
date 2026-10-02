@@ -236,6 +236,28 @@ for (const rel of required) {
   else fail(`missing ${rel}`);
 }
 
+// Documentation that names a command which does not exist is worse than no
+// documentation: `npm run migrate` reads perfectly and exits non-zero. Four such
+// names were documented while the scripts were `db:migrate`, `db:reset`,
+// `db:seed`, `dev:web` and `build`.
+console.log('\n\x1b[1m5b. Documented commands exist\x1b[0m');
+const { scripts } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+let badCommands = 0;
+for (const rel of ['README.md', 'docs/deployment.md', 'docs/architecture.md', 'docs/security.md']) {
+  const docPath = path.join(ROOT, rel);
+  if (!fs.existsSync(docPath)) continue;
+  const source = fs.readFileSync(docPath, 'utf8');
+  for (const match of source.matchAll(/\bnpm run ([a-z][a-z0-9:_-]*)/g)) {
+    if (!Object.hasOwn(scripts, match[1])) {
+      fail(`${rel} says \`npm run ${match[1]}\`, which is not a script in package.json`);
+      badCommands += 1;
+    }
+  }
+}
+if (badCommands === 0) {
+  pass(`every documented npm script exists (${Object.keys(scripts).length} defined)`);
+}
+
 if (fs.existsSync(path.join(ROOT, '.env'))) {
   warn('.env exists locally — confirm it stays untracked (it is gitignored)');
 }

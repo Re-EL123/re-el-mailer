@@ -44,17 +44,17 @@ tests/          vitest
 ```bash
 npm install
 cp .env.example .env        # fill in DATABASE_URL, JWT_SECRET, RESEND_API_KEY, …
-npm run migrate             # apply schema + migrations
+npm run db:migrate         # apply schema + migrations
 npm run create-admin        # provision the first admin (prints a temp password)
-npm run seed                # optional: demo domain, mailboxes, labels, demo mail
+npm run db:seed            # optional: demo domain, mailboxes, labels, demo mail
 npm run check               # syntax, imports, function wiring, secret scan
 npm test                    # unit tests
 npm run db:verify           # integration tests against a real PostgreSQL
-npm run serve               # http://localhost:4173 with /api proxied
+npm run dev:web             # http://localhost:4173 with /api proxied
 ```
 
-Frontend-only changes can be previewed with `npm run serve:web`; icons regenerate with
-`npm run icons`.
+Frontend-only changes can be previewed with `npm run dev:web`; icons regenerate with
+`npm run build`.
 
 ## Configuration
 
@@ -78,13 +78,13 @@ and the browser misreports that as a CORS failure.
 
 | Script | Purpose |
 | --- | --- |
-| `npm run dev` | Vercel dev server for the API |
-| `npm run serve` / `serve:web` | Static frontend server with an `/api` proxy |
+| `npm run dev:api` | Vercel dev server for the API |
+| `npm run dev:web` | Static frontend server with an `/api` proxy |
 | `npm run check` | Static validation of the whole repo |
 | `npm test` | Vitest unit tests |
 | `npm run db:verify` | PostgreSQL integration verification |
-| `npm run migrate` | Apply schema and pending migrations |
-| `npm run reset` | Destructive: drop `public` and re-apply the schema |
-| `npm run seed` | Seed reference data (and optional demo mail) |
+| `npm run db:migrate` | Apply schema and pending migrations |
+| `npm run db:reset` | Destructive: drop `public` and re-apply the schema |
+| `npm run db:seed` | Seed reference data (and optional demo mail) |
 | `npm run create-admin` | Create or promote an admin user |
-| `npm run icons` | Regenerate PWA icons |
+| `npm run build` | Regenerate PWA icons |

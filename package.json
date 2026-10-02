@@ -13,6 +13,7 @@
     "dev:web": "node scripts/serve-web.mjs",
     "build": "node scripts/build-icons.mjs",
     "db:migrate": "node scripts/migrate.mjs",
+    "db:migrate:vercel": "node scripts/migrate.mjs --pull",
     "db:seed": "node scripts/seed.mjs",
     "db:reset": "node scripts/reset.mjs",
     "check": "node scripts/check.mjs",
