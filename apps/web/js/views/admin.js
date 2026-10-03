@@ -53,7 +53,9 @@ async function overviewTab() {
       el('div', { class: 'stats-grid' },
         statTile('Users', s.users), statTile('Mailboxes', s.mailboxes),
         statTile('Messages', s.messages), statTile('Storage', formatBytes(s.storageBytes)),
-        statTile('Sent (30d)', s.sent30d), statTile('Received (30d)', s.received30d),
+        // Counted since midnight UTC, so labelled as today rather than 30d: the
+        // number was never a 30-day figure and saying otherwise was a small lie.
+        statTile('Sent today', s.sentToday), statTile('Received today', s.receivedToday),
       ),
       el('h4', { text: 'Recent activity' }),
       el('ul', { class: 'activity' }, ...(data.activity || []).map((a) =>

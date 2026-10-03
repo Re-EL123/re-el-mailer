@@ -164,31 +164,52 @@ function auditView(row) {
   };
 }
 
-export default createHandler({
-  name: 'admin',
-  audit: {
-    'create-user': { action: 'admin.user.create', entityType: 'user' },
-    'update-user': { action: 'admin.user.update', entityType: 'user' },
-    'delete-user': { action: 'admin.user.delete', entityType: 'user' },
-    'create-mailbox': { action: 'admin.mailbox.create', entityType: 'mailbox' },
-    'update-mailbox': { action: 'admin.mailbox.update', entityType: 'mailbox' },
-    'delete-mailbox': { action: 'admin.mailbox.delete', entityType: 'mailbox' },
-    'create-domain': { action: 'admin.domain.create', entityType: 'domain' },
-    'delete-domain': { action: 'admin.domain.delete', entityType: 'domain' },
-    'delete-route': { action: 'admin.route.delete', entityType: 'route' },
-  },
+/** Action name -> audit entry, for the mutations the console can perform. */
+const AUDIT_ACTIONS = {
+  'create-user': { action: 'admin.user.create', entityType: 'user' },
+  'update-user': { action: 'admin.user.update', entityType: 'user' },
+  'delete-user': { action: 'admin.user.delete', entityType: 'user' },
+  'create-mailbox': { action: 'admin.mailbox.create', entityType: 'mailbox' },
+  'update-mailbox': { action: 'admin.mailbox.update', entityType: 'mailbox' },
+  'delete-mailbox': { action: 'admin.mailbox.delete', entityType: 'mailbox' },
+  'create-domain': { action: 'admin.domain.create', entityType: 'domain' },
+  'delete-domain': { action: 'admin.domain.delete', entityType: 'domain' },
+  'delete-route': { action: 'admin.route.delete', entityType: 'route' },
+};
 
-  actions: {
+/**
+ * Exported so the handlers can be unit tested directly. createHandler() closes
+ * over this map, so without the export there is no seam: the dashboard payload
+ * contract could only be checked by deploying and signing in by hand, which is
+ * how stats rendered as "[object Object]" and every activity date as
+ * "Invalid Date" for so long.
+ */
+export const actions = {
     // ── Dashboard ───────────────────────────────────────────────────────────
     overview: {
       method: 'GET',
       auth: 'session',
       handler: async (ctx) => {
         requireStaff(ctx);
+        const stats = await platformStats();
         return {
-          stats: await platformStats(),
+          // Flattened to what the console renders. platformStats() nests its counts
+          // ({ users: { total, admins, active } }), so the tiles were handed an
+          // object and printed "[object Object]", while storageBytes and the
+          // send/receive counts — which exist in neither shape — silently read 0.
+          stats: {
+            users: stats.users.total,
+            mailboxes: stats.mailboxes.total,
+            messages: stats.messages.total,
+            storageBytes: stats.messages.bytes,
+            sentToday: stats.sentToday,
+            receivedToday: stats.receivedToday,
+          },
           usage: await usageSeries({ days: queryInt(ctx, 'days', { min: 1, max: 90, fallback: 14 }) }),
-          activity: await recentActivity({ limit: 12 }),
+          // auditView, like every other admin action: recentActivity() returns raw
+          // snake_case rows, so the console read a.actorEmail and a.createdAt as
+          // undefined and printed "system" and "Invalid Date" for every entry.
+          activity: (await recentActivity({ limit: 12 })).map(auditView),
         };
       },
     },
@@ -719,5 +740,10 @@ export default createHandler({
         };
       },
     },
-  },
+};
+
+export default createHandler({
+  name: 'admin',
+  audit: AUDIT_ACTIONS,
+  actions,
 });

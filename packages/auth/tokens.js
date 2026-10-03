@@ -193,6 +193,23 @@ export async function revokeAllForUser(userId, reason = 'password_changed', exce
 }
 
 /**
+ * Read one value from either a raw database row or an already-mapped camelCase
+ * object, so this cannot depend on which caller it came from.
+ *
+ * Login and refresh both hand buildSessionPayload() the rows straight out of
+ * users/mailboxes, where the columns are snake_case. This function used to read
+ * only camelCase, so every one of those fields came out undefined: the topbar
+ * fell back to the email address, and `mustChangePassword` arrived as
+ * undefined, which the client reads as false — an account on a temporary
+ * password reached the inbox without ever being made to change it. The
+ * contract test missed it because its fixture was hand-written in camelCase
+ * with a comment claiming it mirrored the login response.
+ */
+function field(row, snakeName, camelName) {
+  return row?.[camelName] ?? row?.[snakeName];
+}
+
+/**
  * Build the public session payload returned to the client on login/refresh.
  * Contains no password hash, no token hashes and no internal ids beyond the
  * ones the UI legitimately needs.
@@ -205,33 +222,33 @@ export function buildSessionPayload({ user, mailbox, accessToken, accessTokenExp
     user: {
       id: user.id,
       email: user.email,
-      displayName: user.displayName,
+      displayName: field(user, 'display_name', 'displayName') ?? null,
       role: user.role,
       status: user.status,
-      mustChangePassword: user.mustChangePassword,
-      lastLoginAt: user.lastLoginAt,
+      mustChangePassword: Boolean(field(user, 'must_change_password', 'mustChangePassword')),
+      lastLoginAt: field(user, 'last_login_at', 'lastLoginAt') ?? null,
       preferences: user.preferences ?? {},
     },
     mailbox: mailbox
       ? {
           id: mailbox.id,
           email: mailbox.email,
-          displayName: mailbox.displayName,
+          displayName: field(mailbox, 'display_name', 'displayName') ?? null,
           domain: mailbox.domain,
           status: mailbox.status,
-          quotaBytes: mailbox.quotaBytes,
-          storageUsedBytes: mailbox.storageUsedBytes,
-          signatureHtml: mailbox.signatureHtml,
-          signatureText: mailbox.signatureText,
-          autoRead: mailbox.autoRead,
+          quotaBytes: Number(field(mailbox, 'quota_bytes', 'quotaBytes') ?? 0),
+          storageUsedBytes: Number(field(mailbox, 'storage_used_bytes', 'storageUsedBytes') ?? 0),
+          signatureHtml: field(mailbox, 'signature_html', 'signatureHtml') ?? null,
+          signatureText: field(mailbox, 'signature_text', 'signatureText') ?? null,
+          autoRead: Boolean(field(mailbox, 'auto_read', 'autoRead')),
         }
       : null,
     mailboxes: mailboxes.map((entry) => ({
       id: entry.id,
       email: entry.email,
-      displayName: entry.displayName,
+      displayName: field(entry, 'display_name', 'displayName') ?? null,
       status: entry.status,
-      isPrimary: entry.isPrimary,
+      isPrimary: Boolean(field(entry, 'is_primary', 'isPrimary')),
       domain: entry.domain,
     })),
   };
