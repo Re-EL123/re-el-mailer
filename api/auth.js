@@ -326,8 +326,12 @@ export const actions = {
         }
 
         const policy = checkPasswordPolicy(ctx.body.password);
-        if (!policy.ok) {
-          throw new AppError(Codes.VALIDATION_ERROR, policy.message, 400, { details: policy });
+        // checkPasswordPolicy() returns { valid, errors }. It has no `ok`, so
+        // `!policy.ok` was true for every password and this endpoint could never
+        // succeed — including passwords the policy accepted, which came back
+        // VALIDATION_ERROR carrying details of { valid: true, errors: [] }.
+        if (!policy.valid) {
+          throw new AppError(Codes.VALIDATION_ERROR, policy.errors[0], 400, { details: policy });
         }
 
         await updateUser(record.user_id, {
@@ -378,8 +382,11 @@ export const actions = {
         }
 
         const policy = checkPasswordPolicy(ctx.body.newPassword);
-        if (!policy.ok) {
-          throw new AppError(Codes.VALIDATION_ERROR, policy.message, 400, { details: policy });
+        // Same defect as reset-password: reading a field the policy never sets
+        // made every forced password change fail, so a create-admin account could
+        // never get past its first screen.
+        if (!policy.valid) {
+          throw new AppError(Codes.VALIDATION_ERROR, policy.errors[0], 400, { details: policy });
         }
 
         await updateUser(user.id, {

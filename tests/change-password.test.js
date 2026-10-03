@@ -19,7 +19,6 @@ const findCredentialById = vi.fn();
 const updateUser = vi.fn();
 const verifyPassword = vi.fn();
 const hashPassword = vi.fn();
-const checkPasswordPolicy = vi.fn();
 const revokeAllSessions = vi.fn();
 
 vi.mock('../packages/db/users.js', () => ({
@@ -39,11 +38,17 @@ vi.mock('../packages/db/system.js', () => ({
   findActiveSessionById: vi.fn(),
   touchSession: vi.fn(),
 }));
-vi.mock('../packages/auth/passwords.js', () => ({
-  hashPassword: (...a) => hashPassword(...a),
-  verifyPassword: (...a) => verifyPassword(...a),
-  checkPasswordPolicy: (...a) => checkPasswordPolicy(...a),
-}));
+// checkPasswordPolicy is deliberately NOT mocked. A stub returning { ok: true }
+// hid the defect that made this endpoint unreachable: the real function returns
+// { valid, errors }, and the handler was reading a field that never exists.
+vi.mock('../packages/auth/passwords.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    hashPassword: (...a) => hashPassword(...a),
+    verifyPassword: (...a) => verifyPassword(...a),
+  };
+});
 vi.mock('../packages/auth/tokens.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -72,12 +77,15 @@ function sessionUser() {
   };
 }
 
+/** Satisfies checkPasswordPolicy: 10+, mixed case, a digit, no spaces. */
+const COMPLIANT = 'Fresh-Pass2';
+
 function ctx(overrides = {}) {
   return {
     session: { user: sessionUser(), sessionId: 'ses_1' },
     body: {
       currentPassword: 'Generated-Pass1',
-      newPassword: 'Fresh-Pass2',
+      newPassword: COMPLIANT,
       revokeOtherSessions: true,
       ...overrides,
     },
@@ -90,18 +98,35 @@ beforeEach(() => {
   updateUser.mockReset();
   verifyPassword.mockReset();
   hashPassword.mockReset();
-  checkPasswordPolicy.mockReset();
   revokeAllSessions.mockReset();
 
   findCredentialById.mockResolvedValue({ ...sessionUser(), password_hash: '$2b$10$storedhash' });
   // Only the current password matches; the reuse check must come back false or
   // the handler correctly refuses a "new" password it has seen before.
   verifyPassword.mockImplementation(async (plaintext) => plaintext === 'Generated-Pass1');
-  checkPasswordPolicy.mockReturnValue({ ok: true });
   hashPassword.mockResolvedValue('$2b$10$newhash');
 });
 
 describe('forced password change', () => {
+  it('completes for a password the policy accepts', async () => {
+    // The regression: `!policy.ok` is true for every input because the policy has
+    // no `ok`, so this endpoint rejected even a compliant password — answering
+    // VALIDATION_ERROR with details of { valid: true, errors: [] }.
+    const changePassword = await loadHandler();
+    const result = await changePassword(ctx());
+
+    expect(result.changed).toBe(true);
+    expect(updateUser).toHaveBeenCalled();
+  });
+
+  it('still refuses a password the policy rejects', async () => {
+    const changePassword = await loadHandler();
+    // Compliant except for the digit, so the first unmet rule is the one asserted.
+    await expect(changePassword(ctx({ newPassword: 'NoDigitsHereAtAll' })))
+      .rejects.toThrow('Include at least one number.');
+    expect(updateUser).not.toHaveBeenCalled();
+  });
+
   it('verifies against the stored hash, not the session user', async () => {
     const changePassword = await loadHandler();
     const result = await changePassword(ctx());
