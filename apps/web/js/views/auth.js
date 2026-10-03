@@ -172,6 +172,9 @@ function resetView(container, ctx) {
   mount(container, el('div', { class: 'auth-wrap' }, brandPanel(), form));
 }
 
+/** Mirrors checkPasswordPolicy's defaults; the server remains the authority. */
+const POLICY_HINT = 'At least 10 characters, with an upper and a lower case letter and a number.';
+
 function changePasswordView(container) {
   const box = errorBox();
   const current = el('input', { type: 'password', required: true, autocomplete: 'current-password' });
@@ -192,7 +195,7 @@ function changePasswordView(container) {
     el('p', { class: 'muted', text: 'You must change your temporary password before continuing.' }),
     field('Current password', current),
     field('New password', next),
-    el('p', { class: 'muted', text: 'At least 10 characters.' }),
+    el('p', { class: 'muted', text: POLICY_HINT }),
     box,
     submit,
   );

@@ -85,10 +85,21 @@ export class ApiError extends Error {
  */
 export function describeApiError(err) {
   if (!(err instanceof ApiError)) return 'Something went wrong. Please try again.';
-  const specifics = (Array.isArray(err.details) ? err.details : [])
-    .map((issue) => (typeof issue?.message === 'string' ? issue.message.trim() : ''))
-    .filter(Boolean);
-  if (specifics.length > 0) return specifics.join(' ');
+  const details = err.details;
+
+  // Schema rejections: an array of { field, message } from the pipeline.
+  if (Array.isArray(details)) {
+    const issues = details.map((issue) => (typeof issue?.message === 'string' ? issue.message.trim() : '')).filter(Boolean);
+    if (issues.length > 0) return issues.join(' ');
+  }
+
+  // Policy failures: checkPasswordPolicy reports { valid, errors: string[] },
+  // not the issue-array shape, so the reason stayed hidden too.
+  if (details && Array.isArray(details.errors)) {
+    const rules = details.errors.filter((message) => typeof message === 'string' && message.trim());
+    if (rules.length > 0) return rules.join(' ');
+  }
+
   return err.message || 'Something went wrong. Please try again.';
 }
 

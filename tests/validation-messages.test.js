@@ -13,9 +13,11 @@
  * in front of a user.
  */
 
+import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { changePasswordSchema } from '../packages/validation/schemas.js';
 import { ApiError, describeApiError } from '../apps/web/js/api.js';
+import { checkPasswordPolicy } from '../packages/auth/passwords.js';
 
 function makeRes() {
   const state = { statusCode: null, body: null, headers: {}, headersSent: false, writableEnded: false };
@@ -170,5 +172,59 @@ describe('the message shown to the user', () => {
   it('does not leak an unexpected failure to the user', () => {
     expect(describeApiError(new TypeError('cannot read property of undefined')))
       .toBe('Something went wrong. Please try again.');
+  });
+});
+
+describe('password policy failures name the rule', () => {
+  it('surfaces the real policy reason, whatever the password was', () => {
+    // Exactly what the change-password handler throws for a password missing a
+    // digit: details is a { valid, errors } object, not an issue array.
+    const policy = checkPasswordPolicy('NoDigitsHereAtAll');
+    expect(policy.valid).toBe(false);
+    expect(policy.errors).toContain('Include at least one number.');
+
+    const err = new ApiError('Some of the details provided are not valid.', {
+      code: 'VALIDATION_ERROR',
+      status: 400,
+      details: policy,
+    });
+
+    expect(describeApiError(err)).toBe('Include at least one number.');
+  });
+
+  it('lists every unmet rule at once', () => {
+    const policy = checkPasswordPolicy('alllower');
+    const err = new ApiError('Some of the details provided are not valid.', { details: policy });
+
+    // Nudging one rule at a time is the same dead end as no message at all.
+    expect(describeApiError(err)).toBe(
+      'Use at least 10 characters. Include an upper and a lower case letter. Include at least one number.',
+    );
+  });
+
+  it('does not mistake an unrelated detail object for a reason', () => {
+    // e.g. { supported: [...] } from the action-discovery error.
+    const err = new ApiError('That request could not be understood.', {
+      details: { supported: ['login', 'refresh'] },
+    });
+    expect(describeApiError(err)).toBe('That request could not be understood.');
+  });
+
+  it('agrees with the hint the change-password form shows', async () => {
+    // The hint duplicates the server policy. If a default moves, this fails
+    // rather than quietly steering someone into another rejected password.
+    expect(checkPasswordPolicy('Sh0rt').errors).toContain('Use at least 10 characters.');
+    expect(checkPasswordPolicy('alllowercase').errors)
+      .toEqual(expect.arrayContaining([
+        'Include an upper and a lower case letter.',
+        'Include at least one number.',
+      ]));
+
+    const source = await readFile(new URL('../apps/web/js/views/auth.js', import.meta.url), 'utf8');
+    const hint = source.match(/const POLICY_HINT = '([^']+)'/)[1].toLowerCase();
+
+    for (const token of ['10', 'upper', 'lower', 'number']) {
+      expect(hint).toContain(token);
+    }
   });
 });
