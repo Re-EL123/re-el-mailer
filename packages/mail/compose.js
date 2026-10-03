@@ -91,10 +91,18 @@ export function assertSendable({ to, cc, bcc, replyTo, subject, html, text, atta
   // Envelope From must be on a domain this deployment serves. The caller has
   // already checked that the user owns the mailbox; this stops a mismatched or
   // injected From reaching the provider.
-  const fromAddress = String(from || '').toLowerCase();
+  //
+  // api/send.js passes formatFrom()'s output, `"Name" <addr>`, because that is
+  // the form the provider wants. Judging that string as an address rejected
+  // every send from a mailbox that has a display name: normalizeEmail() refuses
+  // anything containing whitespace, so the domain came back empty and the sender
+  // was told their own address was not on the account. Parse out the address and
+  // check that instead — the display name is cosmetic, and formatFrom() has
+  // already escaped quotes and newlines out of it.
+  const { email: fromAddress } = parseAddress(from);
   if (!fromAddress || !isLocalDomain(emailDomain(fromAddress), mailConfig.domains)) {
     throw new AppError(Codes.VALIDATION_ERROR, 'You can only send from an address on this account.', 400, {
-      details: { from: fromAddress },
+      details: { from: String(from || '') },
     });
   }
 

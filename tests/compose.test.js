@@ -89,6 +89,31 @@ describe('assertSendable', () => {
     expect(() => assertSendable({ ...base, from: null })).toThrow();
   });
 
+  it('accepts the display-formatted From that api/send.js actually builds', () => {
+    // Production hands over formatFrom()'s output, not a bare address, so the
+    // From rule was only ever tested against a shape the sender never used. Any
+    // mailbox with a display name could not send at all, and the error named the
+    // wrong problem: it claimed the address was not on the account.
+    const from = formatFrom('me@re-el.co.za', 'Ada Lovelace');
+    expect(from).toBe('"Ada Lovelace" <me@re-el.co.za>');
+    expect(assertSendable({ ...base, from })).toBe(true);
+  });
+
+  it('accepts a display name containing characters that look like a header', () => {
+    const from = formatFrom('me@re-el.co.za', 'Ada\r\nBcc: victim@example.com');
+    expect(assertSendable({ ...base, from })).toBe(true);
+    expect(from).not.toContain('\r');
+    expect(from).not.toContain('\n');
+  });
+
+  it('still rejects a display-formatted From on a foreign domain', () => {
+    // The point of the check is the address, so putting a trusted-looking name
+    // on it must not buy a pass.
+    expect(() => assertSendable({ ...base, from: formatFrom('someone@gmail.com', 'Re-EL Support') }))
+      .toThrow(/only send from an address on this account/);
+    expect(() => assertSendable({ ...base, from: '"Re-EL Support" <a@evil.example>' })).toThrow();
+  });
+
   it('rejects more than 5 reply-to addresses', () => {
     const replyTo = Array.from({ length: 6 }, (_, i) => `r${i}@re-el.co.za`);
     expect(() => assertSendable({ ...base, replyTo })).toThrow();
