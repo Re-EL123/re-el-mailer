@@ -146,12 +146,25 @@ async function rawRequest(path, { method = 'GET', query, body, isForm = false } 
 
   // `credentials: 'include'` is required for the refresh cookie to travel when
   // the API lives on a different origin than the Pages frontend.
-  const res = await fetch(buildUrl(path, query), {
-    method,
-    headers,
-    body: payloadBody,
-    credentials: 'include',
-  });
+  let res;
+  try {
+    res = await fetch(buildUrl(path, query), {
+      method,
+      headers,
+      body: payloadBody,
+      credentials: 'include',
+    });
+  } catch (cause) {
+    // A response that never arrived — offline, a reset connection, a headerless
+    // platform error page — surfaces in the browser as a CORS failure with a null
+    // status. Reporting that as "something went wrong" sends people looking at the
+    // server when the request simply did not land.
+    throw new ApiError('Could not reach the server. Check your connection and try again.', {
+      code: 'NETWORK_ERROR',
+      status: 0,
+      cause,
+    });
+  }
   return parse(res);
 }
 
@@ -168,8 +181,14 @@ async function refresh() {
         }
         return data;
       } catch (err) {
-        accessToken = null;
-        emitAuth(null);
+        // Only a rejection from the server invalidates the session. A request that
+        // never landed — offline, a reset connection, a headerless platform error
+        // page — arrives as a network error, and clearing the session on it turns
+        // a momentary blip into a logout.
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          accessToken = null;
+          emitAuth(null);
+        }
         throw err;
       } finally {
         refreshPromise = null;

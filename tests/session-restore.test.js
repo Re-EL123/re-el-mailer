@@ -129,6 +129,57 @@ describe('session restore after a reload', () => {
     expect(data.expiresIn).toBeUndefined();
   });
 
+  it('reports a request that never reached the server', async () => {
+    // A headerless platform response or a dropped connection reaches the browser
+    // as a CORS failure with a null status, which used to be indistinguishable
+    // from a server-side rejection.
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    const mod = await loadApi();
+
+    const err = await mod.api.auth.changePassword('a', 'b').catch((e) => e);
+
+    // Both come from this module instance: vi.resetModules() means a statically
+    // imported helper would fail its instanceof check against a different class.
+    expect(err).toBeInstanceOf(mod.ApiError);
+    expect(err.code).toBe('NETWORK_ERROR');
+    expect(err.status).toBe(0);
+    expect(mod.describeApiError(err)).toBe('Could not reach the server. Check your connection and try again.');
+  });
+
+  it('keeps the session when the network fails during a refresh', async () => {
+    // Clearing on any error meant one dropped connection logged the user out and
+    // dumped them on the login screen mid-work.
+    const mod = await loadApi();
+    const events = [];
+    mod.onAuthChange((user) => events.push(user));
+
+    // The store installs the token, not the login call itself.
+    mod.setAccessToken('token_live');
+    events.length = 0;
+
+    // Session 401 triggers a refresh, and the refresh never lands.
+    fetchMock.mockResolvedValueOnce(jsonResponse(401, { ok: false, error: { code: 'AUTH_REQUIRED' } }));
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await expect(mod.api.auth.session()).rejects.toThrow();
+
+    expect(events).toEqual([]);
+
+    // And the token is still attached to the next request, so the user retries
+    // rather than signing in again.
+    fetchMock.mockResolvedValue(jsonResponse(200, { ok: true, data: { user: { id: 'usr_1' } } }));
+    await mod.api.auth.session();
+    const last = fetchMock.mock.calls.at(-1);
+    expect(last[1].headers.Authorization).toBe('Bearer token_live');
+  });
+
+  it('still signs out when the server rejects the refresh', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(401, { ok: false, error: { code: 'AUTH_INVALID' } }));
+    const { api } = await loadApi();
+
+    await expect(api.auth.session()).rejects.toThrow();
+    expect(callsTo('refresh')).toHaveLength(1);
+  });
+
   it('attempts one refresh, then gives up, when the cookie is absent', async () => {
     // One attempt is required: the cookie is httpOnly, so its absence is only
     // knowable by asking the server. Stopping there is what matters — boot()
