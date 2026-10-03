@@ -32,9 +32,22 @@ function toAppError(status, body) {
   const message = typeof body?.message === 'string' ? body.message : '';
   const text = message.toLowerCase();
 
-  if (status === 401 || status === 403) {
-    return new AppError(Codes.AUTH_INVALID, 'The mail provider rejected its credentials.', 502, {
-      cause: new Error(message || `resend ${status}`),
+  // 401 and 403 are different problems with different fixes, and they were
+  // collapsed into one sentence that named neither. Resend answers 401 when the
+  // key itself is wrong, expired or revoked, and 403 when the key is valid but
+  // not allowed to send. The provider's own message is passed through, the way
+  // the 422 and 429 branches already do, because the operator reading the
+  // console is the one who can act on it.
+  if (status === 401) {
+    return new AppError(Codes.AUTH_INVALID, 'The mail provider rejected the API key.', 502, {
+      cause: new Error(message || 'resend 401'),
+      details: { provider: 'resend', providerMessage: message || null, hint: 'Check RESEND_API_KEY in the deployed environment.' },
+    });
+  }
+  if (status === 403) {
+    return new AppError(Codes.AUTH_INVALID, 'The mail provider refused permission for that API key.', 502, {
+      cause: new Error(message || 'resend 403'),
+      details: { provider: 'resend', providerMessage: message || null, hint: 'The key may be restricted without sending access, or belong to another account.' },
     });
   }
   if (status === 422 && (text.includes('domain') || text.includes('from'))) {
