@@ -9,7 +9,7 @@
  */
 
 import { api, ApiError } from '../api.js';
-import { el, formatBytes, mount, toast } from '../ui.js';
+import { confirmDialog, copyText, el, formatBytes, mount, toast } from '../ui.js';
 import { isOwner } from '../store.js';
 
 /** Run a destructive call behind a confirmation, reporting failures inline. */
@@ -37,6 +37,73 @@ function field(label, input) {
 
 function card(title, ...children) {
   return el('section', { class: 'card' }, el('h3', { class: 'card-title', text: title }), ...children);
+}
+
+/**
+ * Render a credential that is only ever shown once, with a copy button.
+ *
+ * A temporary password used to be announced in a toast: gone in a few seconds,
+ * impossible to select, and the only way to see it again was to reset the
+ * password, which signs the user out of every session. Anything holding a
+ * secret belongs on the page until it is dismissed.
+ *
+ * @param {{title: string, value: string, note?: string}|null} secret
+ */
+function secretCard(secret) {
+  if (!secret?.value) return null;
+  return el('div', { class: 'secret' },
+    el('div', { class: 'secret-head' },
+      el('strong', { text: secret.title }),
+      el('button', {
+        class: 'btn btn-sm',
+        text: 'Copy',
+        onClick: async () => {
+          const copied = await copyText(secret.value);
+          toast(copied ? 'Copied to clipboard.' : 'Could not copy — select it and copy manually.',
+            copied ? 'success' : 'error');
+        },
+      }),
+    ),
+    el('div', { class: 'secret-value', text: secret.value }),
+    secret.note ? el('div', { class: 'muted small', text: secret.note }) : null,
+  );
+}
+
+/**
+ * Body for api.admin.createUser.
+ *
+ * A blank password means "generate one": the API returns it exactly once and
+ * emails it, so the caller is responsible for showing it.
+ */
+export function buildCreateUserPayload(form) {
+  const payload = {
+    email: String(form.email || '').trim().toLowerCase(),
+    displayName: String(form.displayName || '').trim(),
+    role: form.role || 'user',
+    status: form.status || 'active',
+  };
+  const password = String(form.password || '');
+  if (password) payload.password = password;
+  return payload;
+}
+
+/**
+ * Body for api.admin.createMailbox.
+ *
+ * `isPrimary` is sent only when it is actually wanted. The API defaults it to
+ * true and clears the user's existing primary to set the new one, so adding a
+ * second mailbox without ticking the box would silently move the flag off the
+ * mailbox the user has been using.
+ */
+export function buildCreateMailboxPayload(form) {
+  const payload = {
+    localPart: String(form.localPart || '').trim().toLowerCase(),
+    displayName: String(form.displayName || '').trim(),
+    isPrimary: Boolean(form.isPrimary),
+  };
+  if (form.domain) payload.domain = form.domain;
+  if (form.userId) payload.userId = form.userId;
+  return payload;
 }
 
 function statTile(label, value) {
@@ -72,10 +139,13 @@ async function overviewTab() {
   return node;
 }
 
-async function usersTab() {
+async function usersTab(secret = null) {
   const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading users…' }));
   try {
     const data = await api.admin.users({ limit: 200 });
+    // create-user and reset-user-password are requireFullAdmin; a manager sees
+    // the same table without controls that would only fail.
+    const canManage = isOwner();
     const table = el('table', { class: 'table' },
       el('thead', {}, el('tr', {},
         el('th', { text: 'Email' }), el('th', { text: 'Name' }), el('th', { text: 'Role' }),
@@ -101,8 +171,22 @@ async function usersTab() {
           el('td', {},
             el('button', { class: 'btn btn-sm', text: 'Reset password', onClick: async () => {
               try {
+                // Asked first because it revokes every session for that user.
+                // Confirmed separately from the call so the reset happens exactly
+                // once: confirmAction() cannot hand back the response, and asking
+                // it to make the call too would generate a second password and
+                // email that one instead of the one shown.
+                const ok = await confirmDialog(
+                  `Reset the password for ${user.email}? They will be signed out everywhere.`,
+                  { confirmText: 'Reset password', danger: true },
+                );
+                if (!ok) return;
                 const res = await api.admin.resetPassword(user.id, {});
-                toast(res.temporaryPassword ? `Temporary password: ${res.temporaryPassword}` : 'Password reset.', 'success');
+                mount(node, await usersTab({
+                  title: `Temporary password for ${user.email}`,
+                  value: res.temporaryPassword,
+                  note: 'Shown once. Copy it now — resetting again signs the user out again.',
+                }));
               } catch (err) { toast(err.message, 'error'); }
             } }),
             user.lockedUntil ? el('button', { class: 'btn btn-sm', text: 'Unlock', onClick: async () => {
@@ -112,31 +196,137 @@ async function usersTab() {
         ),
       )),
     );
-    mount(node, table);
+    const form = canManage ? (() => {
+      const emailInput = el('input', { type: 'email', placeholder: 'name@re-el.co.za', required: true });
+      const nameInput = el('input', { type: 'text', placeholder: 'Full name', required: true });
+      const roleSelect = el('select', {},
+        ...['user', 'manager', 'admin'].map((role) => el('option', { value: role, text: role, selected: role === 'user' })));
+      const statusSelect = el('select', {},
+        ...['active', 'pending', 'disabled'].map((status) => el('option', { value: status, text: status, selected: status === 'active' })));
+      const passwordInput = el('input', {
+        type: 'password',
+        placeholder: 'Blank = generate one',
+        autocomplete: 'new-password',
+      });
+      const createBtn = el('button', { class: 'btn btn-primary', text: 'Create user' });
+
+      createBtn.addEventListener('click', async () => {
+        createBtn.disabled = true;
+        createBtn.textContent = 'Creating…';
+        try {
+          const res = await api.admin.createUser(buildCreateUserPayload({
+            email: emailInput.value,
+            displayName: nameInput.value,
+            role: roleSelect.value,
+            status: statusSelect.value,
+            password: passwordInput.value,
+          }));
+          // Re-rendered rather than patched so the new account, its primary
+          // mailbox and the secret all appear from one source of truth.
+          mount(node, await usersTab({
+            title: `Temporary password for ${res.user.email}`,
+            value: res.temporaryPassword,
+            note: 'Shown once. It was also emailed. They will be asked to change it at first sign-in.',
+          }));
+        } catch (err) {
+          toast(err.message, 'error');
+          createBtn.disabled = false;
+          createBtn.textContent = 'Create user';
+        }
+      });
+
+      return el('div', { class: 'form-row' },
+        field('Email', emailInput),
+        field('Display name', nameInput),
+        field('Role', roleSelect),
+        field('Status', statusSelect),
+        field('Password (optional)', passwordInput),
+        createBtn,
+      );
+    })() : null;
+
+    mount(
+      node,
+      secretCard(secret),
+      card('Users', table, form),
+    );
   } catch (err) {
-    mount(node, el('div', { class: 'empty', text: err.message }));
+    mount(node, errorBox(err));
   }
   return node;
 }
 
-async function mailboxesTab() {
+async function mailboxesTab(secret = null) {
   const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading mailboxes…' }));
   try {
-    const data = await api.admin.mailboxes({ limit: 500 });
-    mount(node, el('table', { class: 'table' },
+    const canManage = isOwner();
+    // The form's two selects need the user list and the domains, so they are
+    // fetched together with the table rather than after it renders.
+    const [data, usersData, domainData] = await Promise.all([
+      api.admin.mailboxes({ limit: 500 }),
+      canManage ? api.admin.users({ limit: 200 }) : null,
+      canManage ? api.admin.domains() : null,
+    ]);
+
+    const table = el('table', { class: 'table' },
       el('thead', {}, el('tr', {},
         el('th', { text: 'Address' }), el('th', { text: 'Display name' }), el('th', { text: 'Status' }),
         el('th', { text: 'Storage' }), el('th', { text: 'Quota' }),
       )),
-      el('tbody', {}, ...data.mailboxes.map((mb) =>
+      el('tbody', {}, ...(data.mailboxes || []).map((mb) =>
         el('tr', {},
           el('td', { text: mb.email }), el('td', { text: mb.displayName }), el('td', { text: mb.status }),
           el('td', { text: formatBytes(mb.storageUsedBytes) }), el('td', { text: formatBytes(mb.quotaBytes) }),
         ),
       )),
-    ));
+    );
+
+    const form = canManage ? (() => {
+      const localInput = el('input', { type: 'text', placeholder: 'support', required: true });
+      const domainSelect = el('select', {},
+        ...(domainData?.domains || []).map((d, i) => el('option', { value: d.name, text: d.name, selected: i === 0 })));
+      const nameInput = el('input', { type: 'text', placeholder: 'Support Desk', required: true });
+      const userSelect = el('select', {},
+        ...(usersData?.users || []).map((u) => el('option', { value: u.id, text: u.email })));
+      const primaryBox = el('input', { type: 'checkbox' });
+      const createBtn = el('button', { class: 'btn btn-primary', text: 'Add mailbox' });
+
+      createBtn.addEventListener('click', async () => {
+        createBtn.disabled = true;
+        createBtn.textContent = 'Adding…';
+        try {
+          const res = await api.admin.createMailbox(buildCreateMailboxPayload({
+            localPart: localInput.value,
+            domain: domainSelect.value,
+            displayName: nameInput.value,
+            userId: userSelect.value,
+            isPrimary: primaryBox.checked,
+          }));
+          mount(node, await mailboxesTab({
+            title: 'Mailbox created',
+            value: res.mailbox.email,
+            note: `Attached to ${usersData.users.find((u) => u.id === res.mailbox.userId)?.email || 'the selected user'}.`,
+          }));
+        } catch (err) {
+          toast(err.message, 'error');
+          createBtn.disabled = false;
+          createBtn.textContent = 'Add mailbox';
+        }
+      });
+
+      return el('div', { class: 'form-row' },
+        field('Local part', localInput),
+        field('Domain', domainSelect),
+        field('Display name', nameInput),
+        field('User', userSelect),
+        field('Primary', primaryBox),
+        createBtn,
+      );
+    })() : null;
+
+    mount(node, secretCard(secret), card('Mailboxes', table, form));
   } catch (err) {
-    mount(node, el('div', { class: 'empty', text: err.message }));
+    mount(node, errorBox(err));
   }
   return node;
 }

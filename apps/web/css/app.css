@@ -321,6 +321,28 @@ textarea { resize: vertical; }
 .domain-picker { max-width: 320px; }
 .routes-body, .audit-body { margin-top: 12px; }
 .admin-tab code { font-size: 12px; background: var(--brand-050); border-radius: 4px; padding: 1px 5px; }
+
+/* A generated credential, shown once. Selectable and copyable: it used to live
+   in a toast that vanished after a few seconds. */
+.secret {
+  border: 1px solid var(--brand);
+  background: var(--brand-050);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.secret-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.secret-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0 6px;
+  user-select: all;
+  overflow-wrap: anywhere;
+}
 .table td .muted.small { display: block; }
 
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 18px; }

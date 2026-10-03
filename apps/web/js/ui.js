@@ -135,6 +135,38 @@ export function toast(message, kind = 'info') {
 }
 
 /** Simple confirm dialog built in-page (no native confirm for styling/tests). */
+/**
+ * Copy text to the clipboard, resolving to whether it actually worked.
+ *
+ * The result is returned rather than thrown because a silent failure is worse
+ * than an error here: someone copying a one-time password has to be able to
+ * trust that it is on their clipboard, so the caller reports the outcome.
+ */
+export async function copyText(text) {
+  const value = String(text ?? '');
+  if (!value) return false;
+
+  try {
+    if (globalThis.navigator?.clipboard?.writeText) {
+      await globalThis.navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // No permission, or not a secure context: try the legacy path below.
+  }
+
+  try {
+    const area = el('textarea', { value, style: { position: 'fixed', top: '0', opacity: '0' } });
+    document.body.append(area);
+    area.select();
+    const copied = document.execCommand?.('copy');
+    area.remove();
+    return Boolean(copied);
+  } catch {
+    return false;
+  }
+}
+
 export function confirmDialog(message, { confirmText = 'Confirm', danger = false } = {}) {
   return new Promise((resolve) => {
     const backdrop = el('div', { class: 'modal-backdrop' });
