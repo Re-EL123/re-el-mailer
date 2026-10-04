@@ -17,10 +17,34 @@ import { logger } from '../shared/logger.js';
 
 const DEFAULT_TOLERANCE_SECONDS = 300;
 const SIGNATURE_VERSION = 'v1';
+const SECRET_PREFIX = 'whsec_';
+
+/**
+ * Derive the HMAC key from a signing secret.
+ *
+ * Resend (svix) issues secrets as `whsec_<base64>`. The base64 portion *is* the
+ * key material, so it must be decoded before signing or verifying — hashing the
+ * literal `whsec_…` text instead produces a different digest and rejects every
+ * genuine delivery. Secrets that are not `whsec_`-prefixed, or whose payload is
+ * not valid base64, are used as raw UTF-8 bytes.
+ *
+ * @param {string} secret
+ * @returns {Buffer}
+ */
+function secretKey(secret) {
+  if (typeof secret === 'string' && secret.startsWith(SECRET_PREFIX)) {
+    const encoded = secret.slice(SECRET_PREFIX.length);
+    const decoded = Buffer.from(encoded, 'base64');
+    // Only trust the decode when it round-trips, so a non-base64 secret that
+    // merely carries the prefix keeps working.
+    if (decoded.length > 0 && decoded.toString('base64') === encoded) return decoded;
+  }
+  return Buffer.from(String(secret), 'utf8');
+}
 
 /** Base64-encode HMAC-SHA256 of `payload` with `secret`. */
 function sign(secret, payload) {
-  return crypto.createHmac('sha256', secret).update(payload).digest('base64');
+  return crypto.createHmac('sha256', secretKey(secret)).update(payload).digest('base64');
 }
 
 /**

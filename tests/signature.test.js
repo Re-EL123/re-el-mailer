@@ -222,3 +222,68 @@ describe('verifyWebhookSignature', () => {
     ).toBe(true);
   });
 });
+
+describe('base64 signing secrets', () => {
+  // Captured from a live Resend `email.received` delivery. Resend issues
+  // `whsec_<base64>` secrets where the base64 payload is the actual HMAC key,
+  // so the verifier must decode it rather than hash the literal prefix text.
+  const RESEND_SECRET = 'whsec_+R9xWS1tTEwF6zjsYfx/2btm+QIzsdYP';
+  const RESEND_BODY =
+    '{"created_at":"2026-10-04T12:41:18.000Z","data":{"attachments":[],"bcc":[],"cc":[],"created_at":"2026-10-04T12:41:20.375Z","email_id":"db24eed0-ea98-4b09-9870-ee46b207665c","from":"noreply@re-el.co.za","message_id":"<010201a106eed8d0-55b7480b-cf3c-41c0-848b-602827357e6e-000000@eu-west-1.amazonses.com>","received_for":["info@re-el.co.za"],"subject":"Loopback diagnostics 3","to":["info@re-el.co.za"]},"type":"email.received"}';
+  const RESEND_HEADERS = {
+    'svix-id': 'msg_3KELG30MqJhvxWvDMaTT786kNQd',
+    'svix-timestamp': '1791117686',
+    'svix-signature': 'v1,MVbcr3ab7reQZV+zLSz0GKuyx+4TkkKj1KrxzNUHLSw=',
+  };
+
+  it('verifies a genuine Resend signature', () => {
+    expect(
+      verifyWebhookSignature({
+        rawBody: RESEND_BODY,
+        headers: RESEND_HEADERS,
+        secret: RESEND_SECRET,
+        allowStale: true,
+      }),
+    ).toEqual({ verified: true });
+  });
+
+  it('does not accept the signature produced by hashing the raw secret text', () => {
+    const wrong = signWebhookPayload({
+      rawBody: RESEND_BODY,
+      id: RESEND_HEADERS['svix-id'],
+      timestamp: Number(RESEND_HEADERS['svix-timestamp']),
+      secret: Buffer.from(RESEND_SECRET, 'utf8'),
+    });
+
+    // Sanity check that the fixture really is base64 key material.
+    expect(wrong['svix-signature']).not.toBe(RESEND_HEADERS['svix-signature']);
+
+    expect(
+      verifyWebhookSignature({
+        rawBody: RESEND_BODY,
+        headers: RESEND_HEADERS,
+        secret: RESEND_SECRET,
+        allowStale: true,
+      }).verified,
+    ).toBe(true);
+  });
+
+  it('round-trips its own signature for a base64 secret', () => {
+    const payload = JSON.stringify({ type: 'email.received' });
+    const signed = signWebhookPayload({ rawBody: payload, secret: RESEND_SECRET });
+
+    expect(
+      verifyWebhookSignature({ rawBody: payload, headers: signed, secret: RESEND_SECRET }).verified,
+    ).toBe(true);
+  });
+
+  it('still treats a prefixed but non-base64 secret as raw bytes', () => {
+    const payload = JSON.stringify({ type: 'email.received' });
+    const signed = signWebhookPayload({ rawBody: payload, secret: 'whsec_not_base64_!!' });
+
+    expect(
+      verifyWebhookSignature({ rawBody: payload, headers: signed, secret: 'whsec_not_base64_!!' })
+        .verified,
+    ).toBe(true);
+  });
+});
