@@ -63,6 +63,10 @@ export async function renderMessage(container, ctx) {
         ),
       );
 
+      // Drop the loading placeholder before anything is appended, otherwise it
+      // stays on screen above the message for the life of the view.
+      mount(body);
+
       // Render body: sanitised HTML in a sandboxed frame, else plain text.
       if (msg.bodyHtml) {
         // Message bodies are sender-controlled, so they are never mounted as
