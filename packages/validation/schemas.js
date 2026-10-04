@@ -193,6 +193,22 @@ export const attachmentUploadSchema = z.object({
     .max(10, 'Up to 10 files at a time.'),
 });
 
+export const attachmentUploadUrlSchema = z.object({
+  draftId: idSchema,
+  filename: z.string().trim().min(1).max(255),
+  mimeType: z.string().trim().max(150).default('application/octet-stream'),
+  // Only used to fail fast with a clear message; the stored object is measured
+  // again on completion, because a client-declared size proves nothing.
+  size: z.number().int().positive(),
+});
+
+export const attachmentCompleteSchema = z.object({
+  draftId: idSchema,
+  attachmentId: idSchema,
+  filename: z.string().trim().min(1).max(255),
+  mimeType: z.string().trim().max(150).default('application/octet-stream'),
+});
+
 export const labelSchema = z.object({
   name: z.string().trim().min(1, 'Enter a label name.').max(40),
   color: hexColorSchema.default('#21396A'),

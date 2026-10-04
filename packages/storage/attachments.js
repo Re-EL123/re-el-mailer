@@ -196,6 +196,60 @@ export async function uploadAttachments({ mailboxId, messageId, files }) {
 }
 
 /**
+ * Mint a short-lived upload URL so the browser can PUT bytes straight to
+ * Storage.
+ *
+ * Serverless request bodies are capped by the platform well below the
+ * attachment limit, so a multipart upload through the function cannot carry a
+ * large file at all. Handing the client a signed URL scoped to one exact path
+ * keeps the bytes off the function entirely.
+ *
+ * The URL grants write access to that single path and nothing else, and the
+ * stored object is still verified server-side before an attachment row exists.
+ *
+ * @returns {Promise<{path: string, bucket: string, url: string, expiresIn: number}>}
+ */
+export async function createUploadUrl({ mailboxId, messageId, attachmentId, filename, mimeType }) {
+  assertUploadable({ filename, mimeType, size: 1 });
+
+  const bucket = mailConfig.attachmentBucket;
+  const path = attachmentPath(mailboxId, messageId, attachmentId, filename);
+  const supabase = storageClient();
+
+  const { data, error } = await supabase.storage.from(bucket).createSignedUploadUrl(path);
+  if (error) throw storageError('createSignedUploadUrl', error, { path });
+
+  return { path, bucket, url: data.signedUrl, expiresIn: SIGNED_URL_TTL_SECONDS };
+}
+
+/**
+ * Read an object's real size and content type from Storage.
+ *
+ * Used to check what the browser actually uploaded: the values a client
+ * declares are untrusted, so the attachment row is only written from what the
+ * bucket holds.
+ *
+ * @returns {Promise<{size: number, contentType: string}|null>} null when absent
+ */
+export async function statAttachment(path) {
+  const supabase = storageClient();
+  const slash = path.lastIndexOf('/');
+  const dir = slash === -1 ? '' : path.slice(0, slash);
+  const name = slash === -1 ? path : path.slice(slash + 1);
+
+  const { data, error } = await supabase.storage.from(mailConfig.attachmentBucket).list(dir, {
+    search: name,
+    limit: 1,
+  });
+  if (error) throw storageError('list', error, { path });
+
+  const entry = (data || []).find((item) => item.name === name);
+  if (!entry) return null;
+
+  return { size: Number(entry.metadata?.size ?? 0), contentType: entry.metadata?.mimetype ?? null };
+}
+
+/**
  * Mint a short-lived download URL.
  *
  * @param {string} path storage key

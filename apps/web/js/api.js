@@ -268,7 +268,8 @@ export const api = {
     folders: (mailboxId) => get('/mail', { action: 'folders', mailboxId }),
     saveDraft: (body) => request('/mail', { method: 'POST', body, query: { action: 'draft' } }),
     deleteDraft: (id, mailboxId) => del('/mail', { action: 'delete-draft', id, mailboxId }),
-    uploadAttachment: (formData) => request('/mail', { method: 'POST', body: formData, isForm: true, query: { action: 'upload-attachment' } }),
+    attachmentUploadUrl: (payload) => request('/mail', { method: 'POST', body: JSON.stringify(payload), query: { action: 'attachment-upload-url' } }),
+    attachmentComplete: (payload) => request('/mail', { method: 'POST', body: JSON.stringify(payload), query: { action: 'attachment-complete' } }),
     attachmentUrl: (id, messageId, inline, mailboxId) =>
       get('/mail', { action: 'attachment-url', id, messageId, inline: inline ? 1 : undefined, mailboxId }),
   },

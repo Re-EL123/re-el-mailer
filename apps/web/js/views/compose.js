@@ -150,26 +150,51 @@ export async function renderCompose(container, ctx) {
   }, 5000);
   const cleanup = () => clearInterval(timer);
 
+  // Attachments go straight to storage: the file bytes never pass through the
+  // API, which caps request bodies far below our attachment limit.
+  async function uploadFile(draft, file) {
+    const ticket = await api.mail.attachmentUploadUrl({
+      draftId: draft,
+      filename: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      size: file.size,
+    });
+
+    const response = await fetch(ticket.url, {
+      method: 'PUT',
+      headers: { 'content-type': file.type || 'application/octet-stream' },
+      body: file,
+    });
+    if (!response.ok) throw new Error(`${file.name}: upload failed (${response.status}).`);
+
+    const done = await api.mail.attachmentComplete({
+      draftId: draft,
+      attachmentId: ticket.attachmentId,
+      filename: file.name,
+      mimeType: file.type || 'application/octet-stream',
+    });
+    return done.attachment;
+  }
+
   fileInput.addEventListener('change', async () => {
     if (!fileInput.files?.length) return;
     const id = draftId || (await saveDraft());
     if (!id) return;
-    const formData = new FormData();
-    formData.append('draftId', id);
-    for (const file of fileInput.files) formData.append('files', file, file.name);
+
+    statusNode.textContent = 'Uploading…';
     try {
-      const data = await api.mail.uploadAttachment(formData);
-      // Append rather than replace: adding a second file used to wipe the chips
-      // for everything already attached, which looked like the upload lost them.
-      for (const uploaded of data.uploaded || []) {
-        attachments.push(uploaded);
+      // One at a time: a failed file must not discard the ones already stored.
+      for (const file of [...fileInput.files]) {
+        try {
+          attachments.push(await uploadFile(id, file));
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+        renderAttachments();
       }
-      renderAttachments();
-      for (const rejected of data.rejected || []) {
-        toast(`${rejected.filename}: ${rejected.reason}`, 'error');
-      }
-    } catch (err) {
-      toast(err.message, 'error');
+    } finally {
+      fileInput.value = '';
+      statusNode.textContent = draftId ? `Draft saved ${new Date().toLocaleTimeString()}` : '';
     }
   });
 

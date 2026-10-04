@@ -51,8 +51,18 @@ import {
   setMessageLabels,
   updateLabel,
 } from '../packages/db/mailboxes.js';
-import { deleteAttachments, signedDownloadUrl, uploadAttachments } from '../packages/storage/attachments.js';
 import {
+  assertUploadable,
+  attachmentPath,
+  createUploadUrl,
+  deleteAttachments,
+  signedDownloadUrl,
+  statAttachment,
+  uploadAttachments,
+} from '../packages/storage/attachments.js';
+import {
+  attachmentCompleteSchema,
+  attachmentUploadUrlSchema,
   labelSchema,
   labelUpdateSchema,
   markSchema,
@@ -630,6 +640,108 @@ export default createHandler({
             sizeBytes: Number(row.size_bytes),
           })),
           rejected,
+        };
+      },
+    },
+
+    // ── Direct-to-storage attachment upload ────────────────────────────────
+    // The function body limit is far below the attachment limit, so the bytes
+    // never come through here. The client asks for a signed URL scoped to one
+    // path, PUTs the file to Storage, then reports it back for verification.
+
+    'attachment-upload-url': {
+      method: 'POST',
+      auth: 'session',
+      body: 'json',
+      schema: attachmentUploadUrlSchema,
+      handler: async (ctx) => {
+        const mailbox = await mailboxFor(ctx, { forSending: true });
+        const draft = await findOwned(ctx.body.draftId, mailbox.id);
+        if (!draft || draft.folder !== 'drafts') {
+          throw new AppError(Codes.NOT_FOUND, 'Draft not found.');
+        }
+
+        const { filename, mimeType, size } = ctx.body;
+        assertUploadable({ filename, mimeType, size });
+
+        const attachmentId = newId('attachment');
+        const target = await createUploadUrl({
+          mailboxId: mailbox.id,
+          messageId: draft.id,
+          attachmentId,
+          filename,
+          mimeType,
+        });
+
+        return {
+          draftId: draft.id,
+          attachmentId,
+          filename,
+          mimeType,
+          size,
+          url: target.url,
+          path: target.path,
+          expiresIn: target.expiresIn,
+        };
+      },
+    },
+
+    'attachment-complete': {
+      method: 'POST',
+      auth: 'session',
+      body: 'json',
+      schema: attachmentCompleteSchema,
+      handler: async (ctx) => {
+        const mailbox = await mailboxFor(ctx, { forSending: true });
+        const draft = await findOwned(ctx.body.draftId, mailbox.id);
+        if (!draft || draft.folder !== 'drafts') {
+          throw new AppError(Codes.NOT_FOUND, 'Draft not found.');
+        }
+
+        // Rebuild the path rather than trusting one from the client, so a
+        // completed upload can only ever land on its own draft's storage key.
+        const path = attachmentPath(mailbox.id, draft.id, ctx.body.attachmentId, ctx.body.filename);
+        const stat = await statAttachment(path);
+
+        if (!stat || stat.size === 0) {
+          throw new AppError(Codes.VALIDATION_ERROR, 'That file was not received. Please try again.', 400);
+        }
+
+        try {
+          assertUploadable({
+            filename: ctx.body.filename,
+            mimeType: stat.contentType || ctx.body.mimeType,
+            size: stat.size,
+          });
+        } catch (err) {
+          // The object is already in the bucket, so a file that turns out to be
+          // unusable is removed rather than left to be found later.
+          await deleteAttachments([path]).catch(() => {});
+          throw err;
+        }
+
+        const row = await createAttachment({
+          id: ctx.body.attachmentId,
+          messageId: draft.id,
+          mailboxId: mailbox.id,
+          filename: ctx.body.filename,
+          mimeType: stat.contentType || ctx.body.mimeType,
+          sizeBytes: stat.size,
+          storageBucket: mailConfig.attachmentBucket,
+          storagePath: path,
+          inline: false,
+        });
+
+        await setHasAttachments(draft.id, true);
+        await refreshMailboxUsage(mailbox.id).catch(() => {});
+
+        return {
+          attachment: {
+            id: row.id,
+            filename: row.filename,
+            mimeType: row.mime_type,
+            sizeBytes: Number(row.size_bytes),
+          },
         };
       },
     },
