@@ -8,7 +8,9 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  hydrateInboundPayload,
   normalizeDeliveryEvent,
+  normalizeInbound,
   shouldAutoRead,
   shouldMarkSpam,
 } from '../packages/mail/inbound.js';
@@ -109,5 +111,107 @@ describe('shouldAutoRead', () => {
   it('does not depend on the spam verdict', () => {
     // Auto-read is a read-state concern only.
     expect(shouldAutoRead({ fromEmail: 'a@b.co', spamVerdict: 'spam' }, false)).toBe(false);
+  });
+});
+
+describe('hydrateInboundPayload', () => {
+  // A real `email.received` body: envelope only, with an `email_id` to expand.
+  const envelope = {
+    type: 'email.received',
+    created_at: '2026-10-04T12:41:18.000Z',
+    data: {
+      attachments: [],
+      bcc: [],
+      cc: [],
+      created_at: '2026-10-04T12:41:20.375Z',
+      email_id: 'db24eed0-ea98-4b09-9870-ee46b207665c',
+      from: 'someone@example.com',
+      message_id: '<abc@mail.example.com>',
+      received_for: ['info@re-el.co.za'],
+      subject: 'Invoice attached',
+      to: ['info@re-el.co.za'],
+    },
+  };
+
+  const content = {
+    object: 'email',
+    id: 'db24eed0-ea98-4b09-9870-ee46b207665c',
+    to: ['info@re-el.co.za'],
+    from: 'someone@example.com',
+    subject: 'Invoice attached',
+    message_id: '<abc@mail.example.com>',
+    html: '<p>Please find it attached.</p>',
+    text: 'Please find it attached.\n',
+    headers: { 'x-ses-spam-verdict': 'PASS' },
+    bcc: [],
+    cc: [],
+    reply_to: [],
+    attachments: [],
+  };
+
+  it('supplies the body a metadata-only webhook omits', () => {
+    // Regression: the webhook carries no body, so messages were stored empty and
+    // opened as "This message has no body."
+    const before = normalizeInbound(envelope);
+    expect(before.bodyHtml).toBe('');
+    expect(before.bodyText).toBe('');
+
+    const after = normalizeInbound(hydrateInboundPayload(envelope, content));
+    expect(after.bodyHtml).toContain('Please find it attached.');
+    expect(after.bodyText).toContain('Please find it attached.');
+    expect(after.snippet).not.toBe('');
+    expect(after.sizeBytes).toBeGreaterThan(0);
+  });
+
+  it('keeps the envelope recipient and subject authoritative', () => {
+    const hydrated = hydrateInboundPayload(envelope, {
+      ...content,
+      to: ['someone-else@re-el.co.za'],
+      subject: 'Stored copy',
+    });
+
+    expect(hydrated.data.to).toEqual(['info@re-el.co.za']);
+    expect(hydrated.data.subject).toBe('Invoice attached');
+  });
+
+  it('never overwrites content the webhook already supplied', () => {
+    const rich = {
+      type: 'email.received',
+      data: { ...envelope.data, html: '<p>inline</p>', text: 'inline' },
+    };
+
+    const hydrated = hydrateInboundPayload(rich, content);
+    expect(hydrated.data.html).toBe('<p>inline</p>');
+    expect(hydrated.data.text).toBe('inline');
+  });
+
+  it('maps attachment download URLs onto the fields the handler stores', () => {
+    const hydrated = hydrateInboundPayload(envelope, content, [
+      {
+        id: '2a0c9ce0-3112-4728-976e-47ddcd16a318',
+        filename: 'invoice.pdf',
+        content_type: 'application/pdf',
+        content_disposition: 'attachment',
+        content_id: null,
+        size: 13264,
+        download_url: 'https://example.resend.com/att/2a0c?Signature=abc',
+      },
+    ]);
+
+    expect(hydrated.data.attachments).toHaveLength(1);
+    const normalized = normalizeInbound(hydrated);
+    expect(normalized.attachments[0]).toMatchObject({
+      filename: 'invoice.pdf',
+      mimeType: 'application/pdf',
+      size: 13264,
+      remoteUrl: 'https://example.resend.com/att/2a0c?Signature=abc',
+      inline: false,
+      rejected: false,
+    });
+  });
+
+  it('leaves the payload untouched when there is no content to merge', () => {
+    expect(hydrateInboundPayload(envelope, null)).toBe(envelope);
+    expect(hydrateInboundPayload(envelope, 'nope')).toBe(envelope);
   });
 });

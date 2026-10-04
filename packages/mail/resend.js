@@ -174,6 +174,28 @@ export async function getEmail(id) {
   return resendFetch(`/emails/${encodeURIComponent(id)}`, { method: 'GET', idempotent: true });
 }
 
+/**
+ * Fetch the full content of a received email.
+ *
+ * Resend's `email.received` webhook deliberately carries envelope metadata only,
+ * so the body, headers and attachment list have to be fetched separately.
+ */
+export async function getReceivedEmail(emailId) {
+  return resendFetch(`/emails/receiving/${encodeURIComponent(emailId)}`, { method: 'GET', idempotent: true });
+}
+
+/**
+ * List a received email's attachments, each with a temporary `download_url`.
+ * Those URLs expire after an hour, so they are resolved at delivery time only.
+ */
+export async function listReceivedAttachments(emailId) {
+  const result = await resendFetch(`/emails/receiving/${encodeURIComponent(emailId)}/attachments`, {
+    method: 'GET',
+    idempotent: true,
+  });
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
 /** Batch-send. Used by admin campaigns. */
 export async function batchSend(payloads) {
   return resendFetch('/emails/batch', { method: 'POST', body: payloads });

@@ -25,12 +25,12 @@ import { AppError, Codes } from '../packages/shared/errors.js';
 import { mail as mailConfig } from '../packages/shared/config.js';
 import { logger } from '../packages/shared/logger.js';
 import { makeSnippet } from '../packages/shared/sanitize.js';
-import { normalizeDeliveryEvent, normalizeInbound, shouldAutoRead, shouldMarkSpam } from '../packages/mail/inbound.js';
+import { normalizeDeliveryEvent, normalizeInbound, hydrateInboundPayload, shouldAutoRead, shouldMarkSpam } from '../packages/mail/inbound.js';
 import { applyDeliveryEvent, createAttachment, createMessage, setHasAttachments } from '../packages/db/messages.js';
 import { ensureDefaultLabels, rememberContacts, resolveInboundRecipient } from '../packages/db/mailboxes.js';
 import { uploadAttachment } from '../packages/storage/attachments.js';
 import { newId } from '../packages/shared/ids.js';
-import { suppressContact } from '../packages/mail/resend.js';
+import { getReceivedEmail, listReceivedAttachments, suppressContact } from '../packages/mail/resend.js';
 
 /**
  * Read the signed bytes and verify the signature.
@@ -95,6 +95,36 @@ async function downloadRemote(url) {
   }
 }
 
+/**
+ * Resolve the message content a metadata-only webhook does not carry.
+ *
+ * Resend's `email.received` event contains just the envelope plus an
+ * `email_id`; the body, headers and attachments are fetched from the
+ * received-email API. A payload that already carries its own content is used
+ * unchanged. Fetch failures are not fatal: the envelope is still authentic and
+ * a stored message with no body beats a bounced webhook that Resend would keep
+ * retrying.
+ *
+ * @param {object} payload verified webhook body
+ * @returns {Promise<object>} payload with content merged in
+ */
+async function loadInboundContent(payload) {
+  const source = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+  const emailId = typeof source?.email_id === 'string' ? source.email_id.trim() : '';
+
+  if (!emailId) return payload;
+  if (source?.html || source?.text) return payload;
+
+  try {
+    const content = await getReceivedEmail(emailId);
+    const attachments = await listReceivedAttachments(emailId).catch(() => []);
+    return hydrateInboundPayload(payload, content, attachments);
+  } catch (err) {
+    logger.warn('Inbound content not fetched', { error: err?.message, emailId });
+    return payload;
+  }
+}
+
 export default createHandler({
   name: 'webhooks',
 
@@ -111,7 +141,7 @@ export default createHandler({
       allowLargeJson: true,
       handler: async (ctx) => {
         const payload = await verifyAndParse(ctx, mailConfig.inboundWebhookSecret());
-        const message = normalizeInbound(payload);
+        const message = normalizeInbound(await loadInboundContent(payload));
 
         // Resolve the recipient to a mailbox and a routing action.
         const route = await resolveInboundRecipient(message.recipient);

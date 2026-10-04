@@ -64,6 +64,48 @@ function addressArray(value) {
 }
 
 /**
+ * Merge the provider's message content into a metadata-only webhook payload.
+ *
+ * Resend's `email.received` event carries only the envelope — `email_id`,
+ * addresses, subject — and never the body. The full message is fetched
+ * separately and folded in here so `normalizeInbound` sees one complete shape
+ * regardless of which form the payload arrived in. Existing payload values win,
+ * so a provider that does send inline content is never overwritten.
+ *
+ * @param {object} payload verified webhook body
+ * @param {object|null} content response from the received-email endpoint
+ * @param {object[]} [attachments] attachment metadata with download URLs
+ * @returns {object} a payload suitable for `normalizeInbound`
+ */
+export function hydrateInboundPayload(payload, content, attachments = []) {
+  if (!content || typeof content !== 'object') return payload;
+
+  const target = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+  const base = { ...(target || {}) };
+
+  const merged = { ...content, ...base };
+  // The envelope in the webhook is authoritative for who the mail was delivered
+  // to; the content response describes the same message but from storage.
+  merged.to = base.to ?? content.to;
+  merged.received_for = base.received_for ?? content.received_for;
+
+  if (attachments.length > 0) {
+    merged.attachments = attachments.map((file) => ({
+      filename: file.filename,
+      content_type: file.content_type,
+      size: file.size,
+      content_id: file.content_id ?? null,
+      disposition: file.content_disposition ?? null,
+      // `normalizeInbound` downloads `url` and stores it; the provider's signed
+      // URL is short-lived, so it is resolved during this request only.
+      url: file.download_url ?? null,
+    }));
+  }
+
+  return payload?.data ? { ...payload, data: merged } : merged;
+}
+
+/**
  * Normalise an inbound webhook payload.
  *
  * @param {object} payload Resend inbound event body
