@@ -38,7 +38,7 @@ import {
 import { audit, listActiveSessions, revokeSessionById } from '../packages/db/system.js';
 import { z } from 'zod';
 import { AppError, Codes } from '../packages/shared/errors.js';
-import { auth as authConfig, env, rateLimit } from '../packages/shared/config.js';
+import { auth as authConfig, rateLimit } from '../packages/shared/config.js';
 import { logger } from '../packages/shared/logger.js';
 import { sha256 } from '../packages/shared/ids.js';
 import { sendPasswordReset } from '../packages/mail/templates.js';
@@ -309,9 +309,11 @@ export const actions = {
             userAgent: ctx.userAgent,
           });
 
-          // Outside production the token is returned so the flow can be tested
-          // without an email provider. Never in production.
-          if (!env.isProduction) {
+          // Only ever on when DEV_EXPOSE_RESET_TOKENS is explicitly set. This
+          // must not be inferred from NODE_ENV: production ran with
+          // NODE_ENV=development, which returned the raw token for any active
+          // address and made this endpoint an account-takeover primitive.
+          if (authConfig.exposeResetTokens) {
             return { sent: true, devToken: reset?.token ?? null };
           }
         }

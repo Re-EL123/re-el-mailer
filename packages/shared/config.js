@@ -132,6 +132,19 @@ export const auth = {
   issuer: 're-el-mailer',
   audience: 're-el-mailer-app',
   bcryptRounds: asInt('BCRYPT_ROUNDS', 12),
+
+  /**
+   * Return the raw password-reset token in the API response so the flow can be
+   * exercised without an email provider.
+   *
+   * Deliberately NOT inferred from NODE_ENV. The forgot-password endpoint is
+   * unauthenticated, so a token in that response is a reset of anybody's
+   * account. It used to be gated on `!env.isProduction`, and production had
+   * NODE_ENV=development set in its environment — which left the token in the
+   * response for every active address on a live deployment. A wrong NODE_ENV
+   * should never be able to open this, so it needs its own flag, defaulting off.
+   */
+  exposeResetTokens: asBool('DEV_EXPOSE_RESET_TOKENS', false),
 };
 
 // ─── Mail / Resend ───────────────────────────────────────────────────────────
