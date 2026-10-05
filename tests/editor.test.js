@@ -12,11 +12,45 @@
  *   • onChange delivers plain text
  *   • getHTML() reflects the document
  *   • a missing host yields null rather than a half-built editor
+ *
+ * One piece of DOM is stubbed below. jsdom has no layout engine, so it does not
+ * implement `Range.getClientRects`, and ProseMirror's scroll-into-view path calls
+ * it from a timer after the transaction that triggered it. That produces an
+ * unhandled error *after* the test that caused it has finished, which fails the
+ * run on a clean exit code while every assertion passes. Stubbing the geometry is
+ * the honest fix: the editor's behaviour under test is document state, not layout.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEditor, TOOLBAR } from '../apps/web/js/vendor/editor.bundle.js';
+
+/** A zero-size rect, which is all ProseMirror needs to make a decision here. */
+const zeroRect = () => ({
+  top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0,
+  toJSON: () => ({}),
+});
+
+if (typeof Range !== 'undefined') {
+  if (typeof Range.prototype.getClientRects !== 'function') {
+    Range.prototype.getClientRects = () => ({
+      length: 0,
+      item: () => null,
+      [Symbol.iterator]: function* empty() {},
+    });
+  }
+  if (typeof Range.prototype.getBoundingClientRect !== 'function') {
+    Range.prototype.getBoundingClientRect = zeroRect;
+  }
+}
+
+if (typeof Element !== 'undefined' && typeof Element.prototype.getClientRects !== 'function') {
+  Element.prototype.getClientRects = () => ({
+    length: 0,
+    item: () => null,
+    [Symbol.iterator]: function* empty() {},
+  });
+}
 
 let host;
 
