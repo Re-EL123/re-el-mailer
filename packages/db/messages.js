@@ -653,8 +653,12 @@ export async function listAttachments(messageId, db = DEFAULT_POOL) {
 }
 
 export async function findAttachment(id, messageId, db = DEFAULT_POOL) {
+  // The `a` alias is required: this statement filters on `a.is_deleted` but the
+  // table was selected without one, so Postgres rejected it with
+  // "missing FROM-clause entry for table a" (42P01) and every attachment
+  // download failed with a database error.
   return db.queryOne(
-    'select * from public.attachments where id = $1 and message_id = $2 and not a.is_deleted',
+    'select * from public.attachments a where a.id = $1 and a.message_id = $2 and not a.is_deleted',
     [id, messageId],
   );
 }
