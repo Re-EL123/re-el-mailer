@@ -292,6 +292,7 @@ export const api = {
     empty: (folder, mailboxId) => post('/mail', { folder }, { action: 'empty', mailboxId }),
     labels: (mailboxId) => get('/mail', { action: 'labels', mailboxId }),
     createLabel: (body, mailboxId) => post('/mail', body, { action: 'create-label', mailboxId }),
+    updateLabel: (id, body, mailboxId) => put('/mail', body, { action: 'update-label', id, mailboxId }),
     deleteLabel: (id, mailboxId) => del('/mail', { action: 'delete-label', id, mailboxId }),
     messagesByLabel: (labelId, query) => get('/mail', { action: 'messages-by-label', labelId, ...query }),
     setLabels: (ids, labelIds, mailboxId) => post('/mail', { ids, labelIds, mailboxId }, { action: 'set-labels' }),

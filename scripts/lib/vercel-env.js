@@ -18,6 +18,16 @@ import { spawnSync } from 'node:child_process';
 import { loadEnvFile } from '../../packages/shared/dotenv.js';
 
 /**
+ * Pinned to the same CLI the deploy docs use.
+ *
+ * A bare `npx vercel` resolves whatever version npx finds or fetches latest,
+ * which intermittently pulled CLI 39 and failed with "The specified token is not
+ * valid" — a failure that has nothing to do with the token being wrong. Pinning
+ * keeps migrations, seeding and admin provisioning on one known-good client.
+ */
+const VERCEL_SPEC = 'vercel@62.2.0';
+
+/**
  * Pull production variables from Vercel and load them into process.env.
  * Exits with guidance if the pull fails; never leaves the file behind.
  */
@@ -28,7 +38,7 @@ export function pullFromVercel({ label = '' } = {}) {
 
   const result = spawnSync(
     'npx',
-    ['vercel', 'env', 'pull', target, '--environment=production', '--yes'],
+    [VERCEL_SPEC, 'env', 'pull', target, '--environment=production', '--yes'],
     { encoding: 'utf8' },
   );
 

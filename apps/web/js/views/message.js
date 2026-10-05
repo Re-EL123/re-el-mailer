@@ -13,6 +13,70 @@ function headerLine(label, value) {
   return el('div', { class: 'hdr' }, el('span', { class: 'hdr-label', text: label }), el('span', { class: 'hdr-value', text }));
 }
 
+/**
+ * Per-message label assignment.
+ *
+ * `set-labels` has always existed server-side, but nothing in the reader
+ * reached it, so applying a label meant editing the database. The full label
+ * list is fetched the first time the control is opened rather than on every
+ * message load, so opening mail stays cheap.
+ */
+function labelControl(msg, mailboxId) {
+  const applied = new Set((msg.labels || []).map((label) => label.id));
+  const menu = el('div', { class: 'label-menu' }, el('span', { class: 'muted small', text: 'Loading labels…' }));
+  const details = el('details', { class: 'label-picker' },
+    el('summary', { class: 'icon-btn', title: 'Labels', text: '🏷' }),
+    el('div', { class: 'label-applied' },
+      (msg.labels || []).length
+        ? msg.labels.map((label) => el('span', { class: 'pill', style: { borderLeft: `3px solid ${label.color || '#21396A'}` }, text: label.name }))
+        : el('span', { class: 'muted small', text: 'No labels' }),
+    ),
+    menu,
+  );
+
+  let loaded = false;
+  details.addEventListener('toggle', async () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    let labels = [];
+    try {
+      labels = (await api.mail.labels(mailboxId)).labels || [];
+    } catch (err) {
+      mount(menu, el('span', { class: 'muted small', text: err.message }));
+      return;
+    }
+    if (!labels.length) {
+      mount(menu, el('span', { class: 'muted small', text: 'Create labels in Settings first.' }));
+      return;
+    }
+    mount(menu, ...labels.map((label) => {
+      const box = el('input', { type: 'checkbox', checked: applied.has(label.id) });
+      box.addEventListener('change', async () => {
+        const next = new Set(applied);
+        if (box.checked) next.add(label.id); else next.delete(label.id);
+        box.disabled = true;
+        try {
+          await api.mail.setLabels([msg.id], [...next], mailboxId);
+          applied.clear();
+          for (const id of next) applied.add(id);
+        } catch (err) {
+          toast(err.message, 'error');
+          box.checked = !box.checked;
+        } finally {
+          box.disabled = false;
+        }
+      });
+      return el('label', { class: 'label-option' },
+        box,
+        el('span', { class: 'label-dot', style: { background: label.color || '#21396A' } }),
+        el('span', { text: label.name }),
+      );
+    }));
+  });
+
+  return details;
+}
+
 export async function renderMessage(container, ctx) {
   const id = ctx.params[0];
   const mailboxId = ctx.query.mailbox;
@@ -53,6 +117,7 @@ export async function renderMessage(container, ctx) {
           } }),
           el('button', { class: 'icon-btn', text: '↩', title: 'Reply', onClick: () => navigate(`compose?reply=${msg.id}&mailbox=${mailboxId}`) }),
           el('button', { class: 'icon-btn', text: '→', title: 'Forward', onClick: () => navigate(`compose?forward=${msg.id}&mailbox=${mailboxId}`) }),
+          labelControl(msg, mailboxId),
         ),
         el('h2', { class: 'reader-subject', text: msg.subject || '(no subject)' }),
         el('div', { class: 'reader-meta' },

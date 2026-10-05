@@ -395,6 +395,144 @@ async function domainsTab() {
   return node;
 }
 
+/**
+ * Settings the server actually reads.
+ *
+ * Only these two families are honoured at runtime: `company.*` is published to
+ * unauthenticated clients by the public settings endpoint, and `retention.*` is
+ * read by the nightly maintenance run. Every other key in the settings table is
+ * decorative today — the send ceilings come from SEND_DAILY_LIMIT_*, the login
+ * lockout from RATE_LIMIT_MAX_AUTH_ATTEMPTS, and the password policy from the
+ * defaults inside checkPasswordPolicy(), which every caller invokes without a
+ * policy argument.
+ *
+ * So the panel renders the rest read-only and says why. An editable box that
+ * saves without changing behaviour is worse than a visibly inert one.
+ */
+const ENFORCED_SETTING_PREFIXES = ['company.', 'retention.'];
+
+const SETTING_GROUPS = [
+  ['company.', 'Company & branding'],
+  ['security.', 'Security'],
+  ['limits.', 'Send limits'],
+  ['retention.', 'Retention'],
+  ['features.', 'Feature flags'],
+];
+
+/** True when changing this key actually changes server behaviour. */
+export function isSettingEnforced(key) {
+  return ENFORCED_SETTING_PREFIXES.some((prefix) => String(key).startsWith(prefix));
+}
+
+/**
+ * Coerce a control's raw value back to the type the server stores.
+ *
+ * jsonb keeps whatever type arrives, so a number posted as a string would store
+ * "100" as text and quietly break every comparison against it. Clearing a number
+ * sends null, which the retention keys read as "fall back to the default".
+ */
+export function parseSettingValue(raw, current) {
+  if (typeof current === 'boolean') return Boolean(raw);
+  if (typeof current === 'number') {
+    if (raw === '' || raw === null || raw === undefined) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : current;
+  }
+  return String(raw);
+}
+
+async function settingsTab() {
+  const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading settings…' }));
+  try {
+    const [{ settings = {}, definitions = [] }] = await Promise.all([api.settings.list()]);
+    const descriptions = new Map(definitions.map((row) => [row.key, row.description]));
+    // `list` allows managers, `update` requires an admin — so a manager gets
+    // the values without the controls, rather than a 403 on save.
+    const canEdit = isOwner();
+    const changes = {};
+
+    const saveBtn = el('button', {
+      class: 'btn btn-primary',
+      text: 'Save settings',
+      disabled: true,
+      onClick: async () => {
+        saveBtn.disabled = true;
+        try {
+          await api.settings.update({ settings: changes });
+          toast('Settings saved.', 'success');
+          // The inputs already hold what was written and setSetting() does not
+          // normalise values, so there is nothing to re-read — just clear the
+          // pending diff so the button goes quiet.
+          for (const key of Object.keys(changes)) delete changes[key];
+        } catch (err) {
+          toast(err.message, 'error');
+          dirty();
+        }
+      },
+    });
+
+    const dirty = () => { saveBtn.disabled = !canEdit || Object.keys(changes).length === 0; };
+
+    function record(key, current, input) {
+      return () => {
+        const next = parseSettingValue(
+          input.type === 'checkbox' ? input.checked : input.value,
+          current,
+        );
+        if (next === current) delete changes[key];
+        else changes[key] = next;
+        dirty();
+      };
+    }
+
+    const group = (label, keys) => {
+      const rows = keys.map((key) => {
+        const current = settings[key] ?? null;
+        const enforced = isSettingEnforced(key);
+        const editable = enforced && canEdit;
+
+        let input;
+        if (typeof current === 'boolean') {
+          input = el('input', { type: 'checkbox', checked: current, disabled: !editable });
+        } else if (typeof current === 'number') {
+          input = el('input', { type: 'number', class: 'field', value: String(current), disabled: !editable });
+        } else {
+          input = el('input', { type: 'text', class: 'field', value: current ?? '', disabled: !editable });
+        }
+        input.addEventListener('change', record(key, current, input));
+
+        return el('div', { class: 'label-row' },
+          field(key, input),
+          el('span', { class: 'muted small', text: descriptions.get(key) || '' }),
+          enforced ? null : el('span', { class: 'pill pill-quiet', text: 'not enforced' }),
+        );
+      });
+      return card(label, ...rows);
+    };
+
+    const known = new Set(definitions.map((row) => row.key));
+    const keysByPrefix = new Map(SETTING_GROUPS.map(([prefix]) => [prefix, []]));
+    for (const key of Object.keys(settings).sort()) {
+      if (!known.has(key)) continue;
+      const prefix = SETTING_GROUPS.find(([p]) => key.startsWith(p))?.[0];
+      if (prefix) keysByPrefix.get(prefix).push(key);
+    }
+
+    mount(node,
+      el('p', { class: 'setting-note', text: canEdit
+        ? 'Only Company and Retention are wired to server behaviour. Keys marked "not enforced" are stored but still read from environment configuration.'
+        : 'Read-only: only an administrator can change these.' }),
+      ...SETTING_GROUPS
+        .map(([prefix, label]) => (keysByPrefix.get(prefix) || []).length ? group(label, keysByPrefix.get(prefix)) : null)
+        .filter(Boolean),
+      saveBtn,
+    );
+  } catch (err) {
+    mount(node, errorBox(err));
+  }
+  return node;
+}
+
 async function routesTab() {
   const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading routes…' }));
   try {
@@ -556,6 +694,7 @@ export async function renderAdmin(container) {
       ['domains', 'Domains'],
       ['routes', 'Routes'],
       ['audit', 'Audit log'],
+      ['settings', 'Settings'],
     ].map(([tab, label], index) =>
       el('button', {
         class: `admin-tab-btn${index === 0 ? ' active' : ''}`,
@@ -573,6 +712,7 @@ export async function renderAdmin(container) {
     domains: domainsTab,
     routes: routesTab,
     audit: auditTab,
+    settings: settingsTab,
   };
 
   async function show(which) {

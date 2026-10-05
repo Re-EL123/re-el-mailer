@@ -43,6 +43,7 @@ import {
   deleteLabel,
   folderCounts,
   listLabels,
+  listMessageLabels,
   listMessagesByLabel,
   quotaStatus,
   refreshMailboxUsage,
@@ -69,6 +70,26 @@ import {
   saveDraftSchema,
   updateMessageSchema,
 } from '../packages/validation/schemas.js';
+
+/**
+ * Shape a label row.
+ *
+ * listLabels() and the label writes return raw rows, so `sort_order` and
+ * `message_count` arrived snake_case while every other endpoint in this API
+ * hands the client camelCase. It happened not to bite while the sidebar only
+ * read id/name/color, which is exactly the kind of gap that shows up as
+ * "count is 0" the moment a UI starts reading the number.
+ */
+function labelView(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    slug: row.slug,
+    sortOrder: Number(row.sort_order ?? 0),
+    messageCount: Number(row.message_count ?? 0),
+  };
+}
 
 /** Shape a stored message for the list view. */
 function listItem(row) {
@@ -118,6 +139,16 @@ function detailItem(row) {
     smtpResponse: row.smtp_response,
     failedCount: Number(row.failed_count ?? 0),
     scheduledFor: row.scheduled_for,
+    // Applied labels, so the reader can show them and offer a toggle without a
+    // second round trip. Absent on list rows, which never fetch them.
+    labels: Array.isArray(row.labels)
+      ? row.labels.map((label) => ({
+          id: label.id,
+          name: label.name,
+          color: label.color,
+          slug: label.slug,
+        }))
+      : [],
   };
 }
 
@@ -188,7 +219,10 @@ const handlerSpec = {
         const row = await findOwned(id, mailbox.id);
         if (!row) throw new AppError(Codes.NOT_FOUND, 'Message not found.');
 
-        const attachments = await listAttachments(row.id);
+        const [attachments, labels] = await Promise.all([
+          listAttachments(row.id),
+          listMessageLabels(row.id),
+        ]);
 
         // Opening a message marks it read, unless the mailbox is set to mark
         // everything read on arrival.
@@ -203,7 +237,7 @@ const handlerSpec = {
         }
 
         return {
-          message: detailItem({ ...updated, attachments }),
+          message: detailItem({ ...updated, attachments, labels }),
           thread: await listThread(row.thread_id, mailbox.id).then((list) => list.map(listItem)),
         };
       },
@@ -257,7 +291,7 @@ const handlerSpec = {
       auth: 'session',
       handler: async (ctx) => {
         const mailbox = await mailboxFor(ctx);
-        return { labels: await listLabels(mailbox.id) };
+        return { labels: (await listLabels(mailbox.id)).map(labelView) };
       },
     },
 
@@ -268,7 +302,7 @@ const handlerSpec = {
       schema: labelSchema,
       handler: async (ctx) => {
         const mailbox = await mailboxFor(ctx);
-        return { label: await createLabel({ mailboxId: mailbox.id, ...ctx.body }) };
+        return { label: labelView(await createLabel({ mailboxId: mailbox.id, ...ctx.body })) };
       },
     },
 
@@ -281,7 +315,15 @@ const handlerSpec = {
         const mailbox = await mailboxFor(ctx);
         const id = String(ctx.query.id || ctx.body.id || '').trim();
         if (!id) throw new AppError(Codes.VALIDATION_ERROR, 'A label id is required.');
-        return { label: await updateLabel(id, mailbox.id, ctx.body) };
+        // updateLabel() returns null both when nothing was supplied to change
+        // and when the row is missing, so the empty patch is rejected first:
+        // otherwise a client that sent {} would be told "Label not found".
+        if (ctx.body.name === undefined && ctx.body.color === undefined && ctx.body.sortOrder === undefined) {
+          throw new AppError(Codes.VALIDATION_ERROR, 'Nothing to change on this label.');
+        }
+        const updated = await updateLabel(id, mailbox.id, ctx.body);
+        if (!updated) throw new AppError(Codes.NOT_FOUND, 'Label not found.', 404);
+        return { label: labelView(updated) };
       },
     },
 

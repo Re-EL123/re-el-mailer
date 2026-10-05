@@ -57,7 +57,11 @@ function mailboxSettings(row) {
   };
 }
 
-export default createHandler({
+// Held in a named object rather than inlined into createHandler() so the action
+// map can be exported, the same seam api/admin.js and api/mail.js use. The admin
+// settings panel needed a testable path: `settings.list` and `settings.update`
+// had no UI caller at all, so nothing could check what the console would send.
+const handlerSpec = {
   name: 'settings',
   audit: {
     update: { action: 'settings.update', entityType: 'settings' },
@@ -170,4 +174,8 @@ export default createHandler({
       },
     },
   },
-});
+};
+
+export const actions = handlerSpec.actions;
+
+export default createHandler(handlerSpec);
