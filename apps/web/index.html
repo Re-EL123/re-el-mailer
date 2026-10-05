@@ -10,8 +10,31 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="manifest" href="manifest.json" />
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="assets/icon-192.png" />
+    <!-- iOS ignores the manifest and cannot render the SVG favicon, so it needs
+         its own raster icon. Three sizes, because iOS picks per device. -->
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
     <link rel="stylesheet" href="css/app.css" />
+
+    <!--
+      Link previews. Scrapers that support Open Graph read these; the Twitter card
+      tags are the same image for clients that only honour that namespace.
+      og:url and og:image are absolute because the page is served from a Pages
+      host and every scraper resolves relative URLs against the fetching
+      document rather than the canonical URL.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Re-EL Mailer" />
+    <meta property="og:title" content="Re-EL Mailer" />
+    <meta property="og:description" content="Business email. Built for Re-EL." />
+    <meta property="og:url" content="https://mailer.re-el.co.za/" />
+    <meta property="og:image" content="https://mailer.re-el.co.za/assets/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Re-EL Mailer" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Re-EL Mailer" />
+    <meta name="twitter:description" content="Business email. Built for Re-EL." />
+    <meta name="twitter:image" content="https://mailer.re-el.co.za/assets/og-image.png" />
     <script>
       // API origin.
       //

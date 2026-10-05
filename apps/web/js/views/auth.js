@@ -5,6 +5,7 @@
 
 import { api, ApiError, describeApiError } from '../api.js';
 import { el, mount, toast } from '../ui.js';
+import { icon } from '../icons.js';
 import { state, setState, adoptSession, saveTheme } from '../store.js';
 import { navigate } from '../router.js';
 import { notifySignedIn } from '../auth-events.js';
@@ -236,13 +237,22 @@ export function renderChangePassword(container) {
   changePasswordView(container);
 }
 
-/** Small theme toggle shown on auth screens. */
+/**
+ * Small theme toggle shown on auth screens.
+ *
+ * The button is rebuilt rather than restyled when the theme changes, because
+ * state.theme is only updated by the two paths that call saveTheme here and on
+ * the settings screen; there is no observer to redraw the icon.
+ */
 export function themeToggle() {
-  return el('button', {
-    class: 'icon-btn',
-    title: 'Toggle theme',
-    'aria-label': 'Toggle theme',
-    text: '◐',
-    onClick: () => saveTheme(state.theme === 'dark' ? 'light' : 'dark'),
-  });
+  return el(
+    'button',
+    {
+      class: 'icon-btn',
+      title: 'Toggle theme',
+      'aria-label': `Toggle theme (currently ${state.theme === 'dark' ? 'dark' : 'light'})`,
+      onClick: () => saveTheme(state.theme === 'dark' ? 'light' : 'dark'),
+    },
+    icon('theme', { size: 18 }),
+  );
 }

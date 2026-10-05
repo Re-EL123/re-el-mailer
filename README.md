@@ -33,7 +33,7 @@ packages/
   shared/       config, logger, dotenv, validation schemas
 apps/web/       static PWA frontend
 database/       schema.sql + migrations
-scripts/        migrate, seed, reset, create-admin, check, verify-db, serve-web, build-icons
+scripts/        migrate, seed, reset, create-admin, check, verify-db, serve-web, build-icons, build-editor
 .github/        CI (check + test) and Pages deployment workflows
 docs/           architecture, security, deployment
 tests/          vitest

@@ -9,7 +9,7 @@
  */
 
 import { api, ApiError } from '../api.js';
-import { confirmDialog, copyText, el, formatBytes, mount, toast } from '../ui.js';
+import { confirmDialog, copyText, el, formatBytes, mount, skeletonCards, toast } from '../ui.js';
 import { isOwner } from '../store.js';
 
 /** Run a destructive call behind a confirmation, reporting failures inline. */
@@ -111,7 +111,7 @@ function statTile(label, value) {
 }
 
 async function overviewTab() {
-  const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading overview…' }));
+  const node = el('div', { class: 'admin-tab' }, skeletonCards({ count: 1, lines: 4 }));
   try {
     const data = await api.admin.overview(14);
     const s = data.stats || {};
@@ -124,7 +124,9 @@ async function overviewTab() {
         // number was never a 30-day figure and saying otherwise was a small lie.
         statTile('Sent today', s.sentToday), statTile('Received today', s.receivedToday),
       ),
-      el('h4', { text: 'Recent activity' }),
+      // h3, not h4: this heading sits directly under the view's h2 with no card()
+// wrapper, so h4 skipped a level.
+      el('h3', { class: 'admin-subhead', text: 'Recent activity' }),
       el('ul', { class: 'activity' }, ...(data.activity || []).map((a) =>
         el('li', { class: 'activity-item' },
           el('span', { class: 'activity-action', text: a.action }),
@@ -140,7 +142,7 @@ async function overviewTab() {
 }
 
 async function usersTab(secret = null) {
-  const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading users…' }));
+  const node = el('div', { class: 'admin-tab' }, skeletonCards({ count: 1, lines: 4 }));
   try {
     const data = await api.admin.users({ limit: 200 });
     // create-user and reset-user-password are requireFullAdmin; a manager sees
@@ -257,7 +259,7 @@ async function usersTab(secret = null) {
 }
 
 async function mailboxesTab(secret = null) {
-  const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading mailboxes…' }));
+  const node = el('div', { class: 'admin-tab' }, skeletonCards({ count: 1, lines: 4 }));
   try {
     const canManage = isOwner();
     // The form's two selects need the user list and the domains, so they are
@@ -332,7 +334,7 @@ async function mailboxesTab(secret = null) {
 }
 
 async function domainsTab() {
-  const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading domains…' }));
+  const node = el('div', { class: 'admin-tab' }, skeletonCards({ count: 1, lines: 4 }));
   try {
     const data = await api.admin.domains();
     const nameInput = el('input', { type: 'text', placeholder: 'example.co.za', required: true });
@@ -442,7 +444,7 @@ export function parseSettingValue(raw, current) {
 }
 
 async function settingsTab() {
-  const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading settings…' }));
+  const node = el('div', { class: 'admin-tab' }, skeletonCards({ count: 1, lines: 4 }));
   try {
     const [{ settings = {}, definitions = [] }] = await Promise.all([api.settings.list()]);
     const descriptions = new Map(definitions.map((row) => [row.key, row.description]));
@@ -534,7 +536,7 @@ async function settingsTab() {
 }
 
 async function routesTab() {
-  const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading routes…' }));
+  const node = el('div', { class: 'admin-tab' }, skeletonCards({ count: 1, lines: 4 }));
   try {
     const { domains } = await api.admin.domains();
     if (!domains?.length) {
@@ -548,7 +550,7 @@ async function routesTab() {
     const body = el('div', { class: 'routes-body' });
 
     async function loadRoutes(domainId) {
-      mount(body, el('div', { class: 'loading', text: 'Loading routes…' }));
+      mount(body, skeletonCards({ count: 1, lines: 4 }));
       try {
         const data = await api.admin.routes(domainId);
         const { mailboxes } = await api.admin.mailboxes({ limit: 500 });
@@ -638,14 +640,14 @@ async function routesTab() {
 }
 
 async function auditTab() {
-  const node = el('div', { class: 'admin-tab' }, el('div', { class: 'loading', text: 'Loading audit log…' }));
+  const node = el('div', { class: 'admin-tab' }, skeletonCards({ count: 1, lines: 4 }));
   try {
     const actionFilter = el('input', { type: 'search', placeholder: 'e.g. admin.user.create' });
     const entityFilter = el('input', { type: 'search', placeholder: 'user, mailbox, domain…' });
     const body = el('div', { class: 'audit-body' });
 
     async function load() {
-      mount(body, el('div', { class: 'loading', text: 'Loading…' }));
+      mount(body, skeletonCards({ count: 1, lines: 3 }));
       try {
         const data = await api.admin.audit({ limit: 100, action: actionFilter.value.trim() || undefined, entityType: entityFilter.value.trim() || undefined });
         mount(body, el('table', { class: 'table' },
@@ -721,7 +723,7 @@ export async function renderAdmin(container) {
       btn.classList.toggle('active', btn.dataset.tab === which);
     }
     // Clear first so a slow tab cannot land on top of a newer one.
-    mount(content, el('div', { class: 'loading', text: 'Loading…' }));
+    mount(content, skeletonCards({ count: 1, lines: 3 }));
     mount(content, await load());
   }
 

@@ -9,6 +9,7 @@
 
 import { api } from './api.js';
 import { el, mount, toast } from './ui.js';
+import { icon } from './icons.js';
 import {
   activeMailbox,
   applyTheme,
@@ -25,6 +26,7 @@ import {
 import { currentRoute, navigate, route, setRouterContainer, startRouter } from './router.js';
 import { onSignedIn } from './auth-events.js';
 import { renderChangePassword, renderForgot, renderLogin, renderReset, themeToggle } from './views/auth.js';
+import { installShortcuts, pushShortcuts, toggleShortcutHelp } from './keys.js';
 import { renderMailList } from './views/mail-list.js';
 import { renderMessage } from './views/message.js';
 import { renderCompose } from './views/compose.js';
@@ -58,12 +60,37 @@ function buildShell() {
     { class: 'user-menu' },
     avatar,
     el('span', { class: 'user-name', text: state.user?.displayName || state.user?.email }),
-    el('button', { class: 'icon-btn', title: 'Sign out', text: '⏻', onClick: signOut }),
+    el('button', { class: 'icon-btn', title: 'Sign out', 'aria-label': 'Sign out', onClick: signOut }, icon('power')),
   );
+
+  // tabindex="-1" so the skip link's target can actually receive focus, and a
+  // name so it shows up in the accessibility tree as the main landmark rather
+  // than as an anonymous region.
+  const main = el('main', { class: 'view', id: 'main-view', tabindex: '-1', 'aria-label': 'Mail' });
+
+  const skipLink = el('a', {
+    class: 'skip-link',
+    href: '#main-view',
+    text: 'Skip to mail',
+    // This app routes on the hash fragment, so activating a plain `#main-view`
+    // link would be read as a route called "main-view" and navigate away from
+    // whatever the user was reading. The href is kept because it makes this a
+    // real link — announced as one, and copyable — but the click is handled here
+    // so the URL and the current route both survive.
+    onClick: (event) => {
+      event.preventDefault();
+      main.focus();
+      main.scrollIntoView?.({ block: 'start' });
+    },
+  });
 
   shellNode = el(
     'div',
     { class: 'shell' },
+    // First focusable element in the document. The sidebar has ~20 links in
+    // it, so without this a keyboard user tabs through the whole thing on every
+    // single navigation to reach the mail itself.
+    skipLink,
     el(
       'header',
       { class: 'topbar' },
@@ -73,15 +100,15 @@ function buildShell() {
       ),
       mailboxSelect(),
       el('div', { class: 'topbar-right' },
-        el('a', { class: 'icon-btn', href: '#/settings', title: 'Settings', text: '⚙' }),
+        el('a', { class: 'icon-btn', href: '#/settings', title: 'Settings', 'aria-label': 'Settings' }, icon('settings')),
         themeToggle(),
-        isAdmin() ? el('a', { class: 'icon-btn', href: '#/admin', title: 'Admin', text: '🛠' }) : null,
+        isAdmin() ? el('a', { class: 'icon-btn', href: '#/admin', title: 'Admin', 'aria-label': 'Admin console' }, icon('wrench')) : null,
         userMenu,
       ),
     ),
-    el('main', { class: 'view' }),
+    main,
   );
-  viewRoot = shellNode.querySelector('.view');
+  viewRoot = main;
   return shellNode;
 }
 
@@ -206,6 +233,22 @@ function mountOffline(container, lastUser) {
 
 /* ── Routes ────────────────────────────────────────────────────────────── */
 
+// Shortcuts that mean the same thing everywhere, registered once at module
+// scope so they stay beneath whatever scope the current view pushes and never
+// need re-registering on navigation.
+pushShortcuts('global', {
+  '?': () => toggleShortcutHelp(),
+  'c': () => navigate('compose'),
+  // Also on the modifier chord: holding the key is more deliberate than a bare
+  // letter, so it cannot be hit by accident mid-word in a search field.
+  'mod+enter': () => navigate('compose'),
+  'g i': () => navigate('inbox'),
+  'g s': () => navigate('starred'),
+  'g a': () => navigate('archive'),
+  'g t': () => navigate('trash'),
+  'g d': () => navigate('drafts'),
+});
+
 // Public screens (also registered so the router can navigate to them).
 route('', async (container) => {
   const { name, query } = currentRoute();
@@ -270,6 +313,11 @@ async function boot() {
   loadLocalPrefs();
   applyTheme();
   document.documentElement.dataset.density = state.density;
+
+  // One listener for the life of the page. Installed here rather than at module
+  // scope so it is attached after boot() has decided which surface is showing,
+  // and so a sign-in does not need to re-install it.
+  installShortcuts();
 
   // React to mailbox/theme changes from anywhere in the app.
   subscribe(() => {

@@ -11,7 +11,7 @@
   "scripts": {
     "dev:api": "vercel dev --listen 3000",
     "dev:web": "node scripts/serve-web.mjs",
-    "build": "node scripts/build-icons.mjs",
+    "build": "node scripts/build-editor.mjs && node scripts/build-icons.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "db:migrate:vercel": "node scripts/migrate.mjs --pull",
     "db:seed": "node scripts/seed.mjs",
@@ -23,19 +23,25 @@
     "lint": "eslint .",
     "create-admin": "node scripts/create-admin.mjs",
     "db:verify": "node scripts/verify-db.mjs",
-    "db:check": "node scripts/db-check.mjs"
+    "db:check": "node scripts/db-check.mjs",
+    "build:editor": "node scripts/build-editor.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.57.4",
+    "@tiptap/core": "3.31.4",
+    "@tiptap/starter-kit": "3.31.4",
     "bcryptjs": "2.4.3",
     "jsonwebtoken": "9.0.2",
     "pg": "8.13.1",
     "zod": "4.1.5"
   },
   "devDependencies": {
+    "axe-core": "^4.10.3",
     "embedded-postgres": "^18.4.0-beta.17",
+    "esbuild": "0.25.10",
     "eslint": "^9.39.5",
     "globals": "^17.13.0",
+    "jsdom": "^26.1.0",
     "vercel": "39.2.2",
     "vitest": "3.0.6"
   },

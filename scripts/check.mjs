@@ -310,6 +310,22 @@ if (fs.existsSync(manifestPath)) {
   }
   for (const icon of manifest?.icons ?? []) {
     if (icon.src) assetRefs.push({ from: 'manifest.json', ref: icon.src });
+
+// Every <link rel="...icon"> and og/twitter image in index.html. These are the
+// assets a home-screen shortcut or a link preview actually loads, and none of
+// them are referenced anywhere else, so nothing else would notice one going
+// missing.
+{
+  const htmlPath = path.join(WEB, 'index.html');
+  const html = fs.existsSync(htmlPath) ? fs.readFileSync(htmlPath, 'utf8') : '';
+  for (const match of html.matchAll(/<link[^>]+rel="[^"]*icon"[^>]+href="([^"]+)"/g)) {
+    assetRefs.push({ from: 'index.html', ref: match[1] });
+  }
+  for (const match of html.matchAll(/<meta[^>]+(?:property|name)="(?:og:image|twitter:image)"[^>]+content="([^"]+)"/g)) {
+    // Only the local ones; absolute CDN URLs are not in this repository.
+    if (!/^https?:/i.test(match[1])) assetRefs.push({ from: 'index.html', ref: match[1] });
+  }
+}
   }
 }
 
@@ -354,9 +370,16 @@ const precached = new Set(
     (m) => m[1],
   ),
 );
+
+// Sources that are bundled into a precached file are never loaded by the browser,
+// so requiring them in the precache list would be wrong: it would force shipping
+// two copies of the same code.
+const BUNDLED_SOURCES = new Set(['js/editor-entry.js']);
+
 const unprecached = walk(path.join(WEB, 'js'), isJs)
   .map((file) => path.relative(WEB, file).split(path.sep).join('/'))
   .filter((rel) => !precached.has(rel))
+  .filter((rel) => !BUNDLED_SOURCES.has(rel))
   .sort();
 if (unprecached.length === 0) pass(`all ${precached.size} precached modules exist and every module is listed`);
 else for (const rel of unprecached) fail(`${rel} is not in the service worker precache list`);

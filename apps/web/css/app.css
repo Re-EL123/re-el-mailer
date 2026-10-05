@@ -84,8 +84,14 @@ a:hover { text-decoration: underline; }
 .icon-btn {
   border: none; background: none; cursor: pointer;
   font-size: 18px; color: var(--text); padding: 6px 8px; border-radius: 8px;
+  /* The glyph is an inline SVG now, so line-height and font metrics no longer
+     decide the hit area. Fixed dimensions keep every icon button the same size
+     and keep the focus ring from being clipped by a tight box. */
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 32px; min-height: 32px; line-height: 0;
 }
 .icon-btn:hover { background: var(--brand-050); }
+.icon-btn svg { flex: none; }
 
 input, select, textarea {
   width: 100%;
@@ -96,10 +102,26 @@ input, select, textarea {
   border-radius: var(--radius);
   padding: 9px 11px;
 }
-input:focus, select:focus, textarea:focus, .btn:focus-visible {
+/*
+ * A single visible focus indicator for every interactive element.
+ *
+ * :focus-visible rather than :focus, so a pointer user does not see rings on
+ * every click, but a keyboard user always does. The ring uses a double outline
+ * with a light inner edge so it stays visible against both the light surface and
+ * the dark brand fill — a single 2px ring disappears on one of them.
+ */
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+.btn:focus-visible, .icon-btn:focus-visible, a:focus-visible,
+.msg-row:focus-visible, .thread-item:focus-visible, .attach-chip:focus-visible,
+.side-list a:focus-visible, .modal:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--brand);
-  outline-offset: 1px;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--bg);
+  border-radius: 6px;
 }
+/* Programmatic focus targets (the view container) show no ring: the user did not
+   tab there, and a ring around the whole page reads as an error. */
+.view:focus, [tabindex='-1']:focus { outline: none; box-shadow: none; }
 textarea { resize: vertical; }
 
 .field { display: grid; gap: 4px; margin-bottom: 14px; }
@@ -285,6 +307,80 @@ textarea { resize: vertical; }
 
 /* ── Compose ─────────────────────────────────────────────────────────── */
 
+/*
+ * The rich-text surface has to occupy exactly the box the textarea occupied,
+ * because both are present at once and only one is visible. Anything that grows
+ * or shrinks on activation makes the send button jump under the user's cursor.
+ */
+.editor-host { display: none; }
+.rich-text .editor-host { display: block; }
+.editor-field .compose-body { margin-top: 0; }
+
+/*
+ * ProseMirror renders its own contenteditable div. It needs the same base styles
+ * as every other input in the app or the composer looks like a different product
+ * from the subject field above it.
+ */
+.editor-surface {
+  min-height: 260px;
+  padding: 9px 11px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.editor-surface:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--bg);
+}
+.editor-surface > :first-child { margin-top: 0; }
+.editor-surface > :last-child { margin-bottom: 0; }
+.editor-surface p { margin: 0 0 10px; }
+.editor-surface ul, .editor-surface ol { margin: 0 0 10px; padding-left: 22px; }
+.editor-surface blockquote {
+  margin: 0 0 10px; padding-left: 12px;
+  border-left: 3px solid var(--border); color: var(--muted);
+}
+.editor-surface code {
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg); border-radius: 4px; padding: 1px 5px;
+}
+
+/*
+ * The placeholder rides on a decoration attribute rather than a pseudo-element on
+ * the host, because it has to disappear the moment there is any text. A
+ * ::before would sit behind the caret on a non-empty document.
+ */
+.editor-placeholder[data-placeholder]::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  pointer-events: none;
+  position: absolute;
+}
+
+/* Toolbar: a flat strip of icon buttons above the editor. */
+.editor-toolbar {
+  display: flex; gap: 2px; flex-wrap: wrap;
+  padding: 5px; margin-bottom: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.editor-btn {
+  border: none; background: none; cursor: pointer;
+  padding: 6px 7px; border-radius: 6px; line-height: 0;
+  color: var(--text); display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; min-height: 30px;
+}
+.editor-btn:hover { background: var(--brand-050); }
+/* aria-pressed carries the state; this is only the visual echo of it. */
+.editor-btn.on { background: var(--brand-050); color: var(--brand); }
+
+.link-input { width: 100%; margin: 12px 0; }
+
 .compose-wrap { height: 100%; overflow-y: auto; padding: 16px; }
 .compose-title { margin: 0 0 14px; font-size: 20px; }
 .compose { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; max-width: 900px; }
@@ -421,3 +517,81 @@ textarea { resize: vertical; }
   .user-name, .search { display: none; }
   .mailbox-select { max-width: 150px; }
 }
+
+/* ── Skip link ───────────────────────────────────────────────────────────────
+   Off-screen until focused. It must not be display:none, because that removes it
+   from the tab order entirely and the whole feature stops working. */
+.skip-link {
+  position: absolute; left: 8px; top: -60px; z-index: 60;
+  padding: 9px 14px; border-radius: var(--radius);
+  background: var(--brand); color: #fff; text-decoration: none;
+  font-weight: 600; font-size: 14px;
+  transition: top 120ms ease-out;
+}
+.skip-link:focus { top: 8px; }
+
+/* ── Keyboard shortcut sheet ──────────────────────────────────────────────── */
+.modal-wide { max-width: 640px; width: min(92vw, 640px); }
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 14px;
+}
+.modal-head .modal-title {
+  display: flex; align-items: center; gap: 8px; margin: 0; font-size: 17px;
+}
+.shortcut-cols {
+  display: grid; gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+.shortcut-group-title {
+  margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--muted);
+}
+.shortcut-list { margin: 0; display: grid; gap: 6px; }
+.shortcut-list dt { display: flex; gap: 4px; align-items: center; }
+.shortcut-list dd { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+kbd {
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 4px 6px; border-radius: 5px; min-width: 20px; text-align: center;
+  background: var(--bg); border: 1px solid var(--border);
+  border-bottom-width: 2px; color: var(--text);
+}
+
+/* ── Loading skeletons ───────────────────────────────────────────────────────
+   Shaped like the content they replace, so the layout does not jump when real
+   data lands. aria-hidden because the live region already announces the load. */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg) 25%, var(--border) 37%, var(--bg) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+@keyframes skeleton-sweep {
+  from { background-position: 100% 50%; }
+  to { background-position: 0 50%; }
+}
+/* Respect a reduced-motion preference: hold a flat fill instead of animating. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; background: var(--border); }
+  .skip-link { transition: none; }
+}
+.skeleton-row {
+  display: grid; gap: 8px; padding: 14px 16px;
+  grid-template-columns: 34px 1fr auto; align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.skeleton-avatar { width: 34px; height: 34px; border-radius: 50%; }
+.skeleton-lines { display: grid; gap: 7px; }
+.skeleton-line { height: 10px; }
+.skeleton-date { width: 42px; height: 10px; }
+.skeleton-card { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; }
+.skeleton-card-title { width: 38%; height: 15px; margin-bottom: 14px; }
+.skeleton-block { height: 11px; margin-bottom: 9px; }
+
+/* Row hover/focus must not hide the star or checkbox under the ring. */
+.msg-row { position: relative; }
+.msg-row:focus-visible { z-index: 1; }
+.msg-star.on { color: #f5a623; }
+
+/* Reader sub-headings sit directly under the subject h2. */
+.admin-subhead, .thread-title { margin: 18px 0 10px; font-size: 15px; }

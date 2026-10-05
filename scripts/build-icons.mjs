@@ -166,6 +166,153 @@ function renderIcon(size, maskable) {
   return encodePng(size, size, rgba);
 }
 
+/**
+ * A PNG-encoded text label, in a 5x7 bitmap font.
+ *
+ * Only used for the Open Graph image, which needs a wordmark at a size where the
+ * icon alone says nothing. Shipping a bitmap font rather than an image toolchain
+ * keeps this script dependency-free and deterministic, like everything else here.
+ */
+const GLYPHS = {
+  R: ['11110', '10001', '10001', '11110', '10100', '10010', '10001'],
+  E: ['11111', '10000', '10000', '11110', '10000', '10000', '11111'],
+  '-': ['00000', '00000', '00000', '11111', '00000', '00000', '00000'],
+  L: ['10000', '10000', '10000', '10000', '10000', '10000', '11111'],
+  A: ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
+  I: ['11111', '00100', '00100', '00100', '00100', '00100', '11111'],
+  M: ['10001', '11011', '10101', '10101', '10001', '10001', '10001'],
+  O: ['01110', '10001', '10001', '10001', '10001', '10001', '01110'],
+  Z: ['11111', '00001', '00010', '00100', '01000', '10000', '11111'],
+  B: ['11110', '10001', '10001', '11110', '10001', '10001', '11110'],
+  S: ['01111', '10000', '10000', '01110', '00001', '00001', '11110'],
+  C: ['01110', '10001', '10000', '10000', '10000', '10001', '01110'],
+  P: ['11110', '10001', '10001', '11110', '10000', '10000', '10000'],
+  Y: ['10001', '10001', '01010', '00100', '00100', '00100', '00100'],
+  T: ['11111', '00100', '00100', '00100', '00100', '00100', '00100'],
+  H: ['10001', '10001', '10001', '11111', '10001', '10001', '10001'],
+  U: ['10001', '10001', '10001', '10001', '10001', '10001', '01110'],
+  D: ['11110', '10001', '10001', '10001', '10001', '10001', '11110'],
+  N: ['10001', '11001', '11001', '10101', '10011', '10011', '10001'],
+  G: ['01111', '10000', '10000', '10111', '10001', '10001', '01111'],
+  F: ['11111', '10000', '10000', '11110', '10000', '10000', '10000'],
+  ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
+};
+
+/** Draw text into an RGBA buffer, one pixel per bitmap cell. */
+function drawText(rgba, width, text, { x, y, scale, colour }) {
+  const [r, g, b] = colour;
+  let cursor = x;
+
+  for (const char of text.toUpperCase()) {
+    const rows = GLYPHS[char] || GLYPHS[' '];
+    rows.forEach((row, rowIndex) => {
+      [...row].forEach((bit, colIndex) => {
+        if (bit !== '1') return;
+        // Bounds-checked: an out-of-range write here would silently corrupt the
+        // neighbouring pixel rather than fail.
+        for (let dy = 0; dy < scale; dy += 1) {
+          for (let dx = 0; dx < scale; dx += 1) {
+            const px = cursor + colIndex * scale + dx;
+            const py = y + rowIndex * scale + dy;
+            if (px < 0 || py < 0 || px >= width) continue;
+            const i = (py * width + px) * 4;
+            rgba[i] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
+            rgba[i + 3] = 255;
+          }
+        }
+      });
+    });
+    cursor += 5 * scale + scale;
+  }
+}
+
+/**
+ * The Open Graph card: 1200x630, the size every social scraper asks for.
+ *
+ * Drawn rather than photographed because a link preview that renders on every
+ * platform is worth more than a prettier one, and because this stays in the same
+ * deterministic, dependency-free pipeline as the icons.
+ */
+function renderOgImage() {
+  const width = 1200;
+  const height = 630;
+  const rgba = Buffer.alloc(width * height * 4);
+  const [br, bg, bb] = hexToRgb(BRAND);
+  const [ar, ag, ab] = hexToRgb(ACCENT);
+  const [fr, fg, fb] = hexToRgb('#8FB0FF');
+
+  // Brand navy field.
+  for (let i = 0; i < width * height; i += 1) {
+    rgba[i * 4] = br;
+    rgba[i * 4 + 1] = bg;
+    rgba[i * 4 + 2] = bb;
+    rgba[i * 4 + 3] = 255;
+  }
+
+  // The mark, top left, at 4x the 180px the SVG is authored at.
+  const markSize = 180;
+  const markX = 96;
+  const markY = 96;
+  const markPad = markSize * 0.16;
+  const markInner = markSize - markPad * 2;
+  const markStroke = markInner * 0.09;
+  const markR = markInner * 0.16;
+
+  const inRounded = (x, y) => {
+    const cx = Math.min(Math.max(x, markR), markInner - markR);
+    const cy = Math.min(Math.max(y, markR), markInner - markR);
+    return (x - cx) ** 2 + (y - cy) ** 2 <= markR * markR + 1e-6 ||
+      (x >= markR && x <= markInner - markR) || (y >= markR && y <= markInner - markR);
+  };
+  const distToSegment = (px, py, ax, ay, bx, by) => {
+    const num = Math.abs((bx - ax) * (ay - py) - (ax - px) * (by - ay));
+    return num / (Math.hypot(bx - ax, by - ay) || 1);
+  };
+
+  for (let y = 0; y < markSize; y += 1) {
+    for (let x = 0; x < markSize; x += 1) {
+      const lx = x - markPad;
+      const ly = y - markPad;
+      let hit = false;
+
+      if (lx >= markStroke / 2 && ly >= markStroke / 2 && lx <= markInner - markStroke / 2 && ly <= markInner - markStroke / 2) {
+        const cx = Math.min(Math.max(lx, markR), markInner - markR);
+        const cy = Math.min(Math.max(ly, markR), markInner - markR);
+        const outer = (lx - cx) ** 2 + (ly - cy) ** 2 <= markR * markR + 1e-6;
+        if (outer) {
+          const ix = Math.min(Math.max(lx, markR + markStroke), markInner - markR - markStroke);
+          const iy = Math.min(Math.max(ly, markR + markStroke), markInner - markR - markStroke);
+          const innerHit = (lx - ix) ** 2 + (ly - iy) ** 2 <= (markR - markStroke) ** 2 + 1e-6;
+          hit = !innerHit;
+        }
+      }
+
+      if (!hit) {
+        hit =
+          distToSegment(lx, ly, markStroke, markStroke + markInner * 0.06, markInner / 2, markInner * 0.55) <= markStroke / 2 ||
+          distToSegment(lx, ly, markInner / 2, markInner * 0.55, markInner - markStroke, markStroke + markInner * 0.06) <= markStroke / 2;
+      }
+
+      if (hit && inRounded(lx, ly)) {
+        const i = ((markY + y) * width + (markX + x)) * 4;
+        rgba[i] = ar;
+        rgba[i + 1] = ag;
+        rgba[i + 2] = ab;
+      }
+    }
+  }
+
+  // Wordmark.
+  drawText(rgba, width, 'RE-EL MAILER', { x: 96, y: 340, scale: 13, colour: [255, 255, 255] });
+  // Tagline in the lighter brand tint, deliberately smaller.
+  drawText(rgba, width, 'BUSINESS EMAIL BUILT FOR', { x: 96, y: 470, scale: 5, colour: [fr, fg, fb] });
+  drawText(rgba, width, 'BUSINESS', { x: 96 + 25 * 6 * 5, y: 470, scale: 5, colour: [255, 255, 255] });
+
+  return encodePng(width, height, rgba);
+}
+
 function main() {
   fs.mkdirSync(ASSETS, { recursive: true });
   const written = [];
@@ -192,6 +339,21 @@ function main() {
   const favicon = 'favicon.svg';
   fs.writeFileSync(path.join(ASSETS, favicon), iconSvg(64, false));
   written.push(favicon);
+
+  // Apple touch icon. iOS does not apply the manifest, and it will not render an
+  // SVG favicon either, so without a dedicated PNG a home-screen shortcut gets a
+  // blank page or a screenshot of the launch screen.
+  //
+  // Opaque, not maskable: iOS rounds this itself, and a maskable icon's edge-to-
+  // edge background is what you want here precisely because it gets clipped.
+  const appleTouch = 'apple-touch-icon.png';
+  fs.writeFileSync(path.join(ASSETS, appleTouch), renderIcon(180, true));
+  written.push(appleTouch);
+
+  // Open Graph card for link previews.
+  const ogImage = 'og-image.png';
+  fs.writeFileSync(path.join(ASSETS, ogImage), renderOgImage());
+  written.push(ogImage);
 
   console.log(`Wrote ${written.length} icon file(s) to apps/web/assets:`);
   for (const name of written) console.log(`  ${name}`);

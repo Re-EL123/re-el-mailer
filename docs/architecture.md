@@ -94,7 +94,10 @@ message in `inbox` (or `spam` when the provider flags it).
 
 ## Frontend
 
-Dependency-free ES modules, no build step:
+Native ES modules served as-is: no framework, no transpiler, and no bundler for
+first-party code. The one build step bundles the composer editor (see
+`build-editor.mjs`), because ProseMirror is a third-party package that cannot be
+served to the browser as an unbundled ES module.
 
 ```
 apps/web/
@@ -102,8 +105,12 @@ apps/web/
   js/api.js           fetch wrapper: token refresh, error envelope
   js/store.js         observable state + local preferences
   js/router.js        hash router with per-view cleanup
-  js/ui.js            el()/mount() DOM helpers, formatting, toasts
+  js/keys.js          scoped keyboard shortcuts + help dialog
+  js/icons.js         inline SVG icon set (no icon font, no emoji in chrome)
+  js/ui.js            el()/mount() DOM helpers, Intl formatting, skeletons, toasts
   js/views/*          auth, mail list, message, compose, settings, admin
+  js/editor-entry.js  editor bundle source, bundled at build time
+  js/vendor/          generated editor.bundle.js (committed)
   css/app.css         tokens + layout, light/dark via [data-theme]
   service-worker.js   caches the shell only, never API responses
 ```
@@ -128,4 +135,9 @@ document; the server also sanitises bodies on ingest and on send.
 - `verify-db.mjs` — real PostgreSQL verification of schema, migrations, RLS,
   SQL functions and repositories.
 - `serve-web.mjs` — static server with an `/api` proxy for local development.
-- `build-icons.mjs` — deterministic SVG/PNG icon generation.
+- `build-icons.mjs` — deterministic SVG/PNG generation for the PWA icons, the
+  Apple touch icon and the Open Graph card.
+- `build-editor.mjs` — bundles the composer editor (TipTap/ProseMirror) into
+  `apps/web/js/vendor/editor.bundle.js` with esbuild. The bundle is committed and
+  precached by the service worker; `apps/web/js/editor-entry.js` is its source and
+  is never loaded by the browser, which is why it is not in the precache list.

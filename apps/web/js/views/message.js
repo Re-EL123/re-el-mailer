@@ -4,8 +4,10 @@
  */
 
 import { api } from '../api.js';
-import { displayName, el, fullDate, formatBytes, mount, toast } from '../ui.js';
+import { displayName, el, fullDate, formatBytes, mount, skeletonCards, toast } from '../ui.js';
+import { icon } from '../icons.js';
 import { navigate, refresh } from '../router.js';
+import { pushShortcuts } from '../keys.js';
 
 function headerLine(label, value) {
   if (!value || (Array.isArray(value) && value.length === 0)) return null;
@@ -25,7 +27,7 @@ function labelControl(msg, mailboxId) {
   const applied = new Set((msg.labels || []).map((label) => label.id));
   const menu = el('div', { class: 'label-menu' }, el('span', { class: 'muted small', text: 'Loading labels…' }));
   const details = el('details', { class: 'label-picker' },
-    el('summary', { class: 'icon-btn', title: 'Labels', text: '🏷' }),
+    el('summary', { class: 'icon-btn', title: 'Labels', 'aria-label': 'Labels' }, icon('tag')),
     el('div', { class: 'label-applied' },
       (msg.labels || []).length
         ? msg.labels.map((label) => el('span', { class: 'pill', style: { borderLeft: `3px solid ${label.color || '#21396A'}` }, text: label.name }))
@@ -81,7 +83,7 @@ export async function renderMessage(container, ctx) {
   const id = ctx.params[0];
   const mailboxId = ctx.query.mailbox;
 
-  const body = el('div', { class: 'reader-body' }, el('div', { class: 'loading', text: 'Loading message…' }));
+  const body = el('div', { class: 'reader-body' }, skeletonCards({ count: 1, lines: 6 }));
   const head = el('div', { class: 'reader-head' });
 
   async function openAttachment(att, inline = false) {
@@ -98,25 +100,32 @@ export async function renderMessage(container, ctx) {
     }
   }
 
+  // Declared outside the try because the shortcut handlers below are registered
+  // after it and close over the message; a `const` inside the block would not be
+  // in scope there.
+  let msg = null;
+
   async function load() {
     try {
       const data = await api.mail.get(id, mailboxId);
-      const msg = data.message;
+      msg = data.message;
 
       mount(
         head,
         el(
           'div',
           { class: 'reader-toolbar' },
-          el('button', { class: 'icon-btn', text: '←', title: 'Back', onClick: () => history.back() }),
-          el('button', { class: 'icon-btn', text: msg.isStarred ? '★' : '☆', title: 'Star', onClick: async () => {
+          el('button', { class: 'icon-btn', title: 'Back', 'aria-label': 'Back to list', onClick: () => history.back() }, icon('back')),
+          // aria-pressed carries the starred state: the icon alone distinguishes
+          // the two only by fill, which a screen reader cannot perceive.
+          el('button', { class: 'icon-btn', title: msg.isStarred ? 'Unstar' : 'Star', 'aria-label': msg.isStarred ? 'Remove star' : 'Star this message', 'aria-pressed': String(Boolean(msg.isStarred)), onClick: async () => {
             await api.mail.star([msg.id], !msg.isStarred, mailboxId); refresh();
-          } }),
-          el('button', { class: 'icon-btn', text: '🗑', title: 'Trash', onClick: async () => {
+          } }, icon(msg.isStarred ? 'starFilled' : 'star')),
+          el('button', { class: 'icon-btn', title: 'Trash', 'aria-label': 'Move to trash', onClick: async () => {
             await api.mail.trash([msg.id], mailboxId); navigate('inbox');
-          } }),
-          el('button', { class: 'icon-btn', text: '↩', title: 'Reply', onClick: () => navigate(`compose?reply=${msg.id}&mailbox=${mailboxId}`) }),
-          el('button', { class: 'icon-btn', text: '→', title: 'Forward', onClick: () => navigate(`compose?forward=${msg.id}&mailbox=${mailboxId}`) }),
+          } }, icon('trash')),
+          el('button', { class: 'icon-btn', title: 'Reply', 'aria-label': 'Reply', onClick: () => navigate(`compose?reply=${msg.id}&mailbox=${mailboxId}`) }, icon('reply')),
+          el('button', { class: 'icon-btn', title: 'Forward', 'aria-label': 'Forward', onClick: () => navigate(`compose?forward=${msg.id}&mailbox=${mailboxId}`) }, icon('forward')),
           labelControl(msg, mailboxId),
         ),
         el('h2', { class: 'reader-subject', text: msg.subject || '(no subject)' }),
@@ -166,10 +175,10 @@ export async function renderMessage(container, ctx) {
       if (msg.attachments?.length) {
         body.append(
           el('div', { class: 'attachments' },
-            el('h4', { text: `Attachments (${msg.attachments.length})` }),
+            el('h3', { text: `Attachments (${msg.attachments.length})` }),
             ...msg.attachments.map((att) =>
               el('button', { class: 'attach-chip', title: att.filename, onClick: () => openAttachment(att) },
-                el('span', { text: '📎' }), el('span', { text: att.filename }),
+                icon('paperclip'), el('span', { text: att.filename }),
                 el('span', { class: 'muted small', text: formatBytes(att.sizeBytes) }),
               ),
             ),
@@ -180,7 +189,7 @@ export async function renderMessage(container, ctx) {
       if (data.thread?.length > 1) {
         body.append(
           el('div', { class: 'thread' },
-            el('h4', { text: `Thread (${data.thread.length})` }),
+            el('h3', { class: 'thread-title', text: `Thread (${data.thread.length})` }),
             ...data.thread.map((t) =>
               el('button', { class: `thread-item${t.id === msg.id ? ' current' : ''}`, onClick: () => navigate(`message/${t.id}?mailbox=${mailboxId}`) },
                 el('span', { class: 'thread-from', text: displayName(t.from) }),
@@ -193,9 +202,31 @@ export async function renderMessage(container, ctx) {
       }
     } catch (err) {
       mount(body, el('div', { class: 'empty', text: err.message }));
+      popShortcuts();
+      return;
     }
+
+    // Registered only once the message has loaded, because every binding needs
+    // its id. Pushed after the toolbar so it sits above the global scope.
+    popShortcuts = pushShortcuts('message', {
+      r: () => navigate(`compose?reply=${msg.id}&mailbox=${mailboxId}`),
+      a: () => navigate(`compose?reply=${msg.id}&mode=all&mailbox=${mailboxId}`),
+      f: () => navigate(`compose?forward=${msg.id}&mailbox=${mailboxId}`),
+      s: async () => {
+        await api.mail.star([msg.id], !msg.isStarred, mailboxId);
+        refresh();
+      },
+      hash: async () => {
+        await api.mail.trash([msg.id], mailboxId);
+        navigate('inbox');
+      },
+      u: () => history.back(),
+    });
   }
 
+  let popShortcuts = () => {};
   mount(container, el('div', { class: 'reader' }, head, body));
   await load();
+
+  return () => popShortcuts();
 }

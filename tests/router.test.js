@@ -122,6 +122,40 @@ describe('startRouter', () => {
     router.startRouter(target);
     await vi.waitFor(() => expect(target.textContent).toMatch(/Something went wrong/));
   });
+
+  it('disposes a slow stale render instead of letting it clobber a newer view', async () => {
+    const router = await load();
+    const slowCleanup = vi.fn();
+    const fastCleanup = vi.fn();
+    let releaseSlow;
+    const slowReady = new Promise((resolve) => { releaseSlow = resolve; });
+
+    // The inbox view parks mid-render, the way the composer does while it waits
+    // on its editor bundle.
+    router.route('inbox', async () => {
+      await slowReady;
+      return slowCleanup;
+    });
+    router.route('settings', () => fastCleanup);
+
+    router.startRouter(container());
+
+    // Navigate away while that render is still in flight. This render is newer,
+    // so it owns the container and `currentCleanup` from here on.
+    router.navigate('settings');
+    for (const fn of listeners.get('hashchange')) fn();
+    await vi.waitFor(() => expect(fastCleanup).not.toHaveBeenCalled());
+
+    releaseSlow();
+    await vi.waitFor(() => expect(slowCleanup).toHaveBeenCalledTimes(1));
+
+    // The stale render must not have replaced the live cleanup: navigating again
+    // tears down the settings view, and the abandoned inbox view is not torn down
+    // a second time.
+    for (const fn of listeners.get('hashchange')) fn();
+    await vi.waitFor(() => expect(fastCleanup).toHaveBeenCalledTimes(1));
+    expect(slowCleanup).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('navigate', () => {
