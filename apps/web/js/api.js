@@ -132,7 +132,25 @@ async function parse(res) {
   return payload?.data ?? null;
 }
 
-async function rawRequest(path, { method = 'GET', query, body, isForm = false } = {}) {
+/** Methods safe to replay: a repeat either changes nothing or returns the same answer. */
+const IDEMPOTENT = new Set(['GET', 'HEAD']);
+
+/**
+ * Retries for a request that never landed.
+ *
+ * A weak connection drops requests that the server never saw, so retrying is
+ * free of duplicate-write risk on a GET. POSTs are deliberately excluded: a
+ * resend of "send this message" or "save this draft" could produce a second
+ * email, and a silent duplicate is worse than a visible failure. 5xx is retried
+ * regardless of method, because the server rejecting a request is not the same
+ * as accepting it twice.
+ */
+const RETRY_DELAYS_MS = [400, 1200, 3000];
+const RETRYABLE_STATUS = new Set([500, 502, 503, 504, 429]);
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function rawRequest(path, { method = 'GET', query, body, isForm = false, attempt = 0 } = {}) {
   const headers = {};
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
@@ -159,12 +177,26 @@ async function rawRequest(path, { method = 'GET', query, body, isForm = false } 
     // platform error page — surfaces in the browser as a CORS failure with a null
     // status. Reporting that as "something went wrong" sends people looking at the
     // server when the request simply did not land.
-    throw new ApiError('Could not reach the server. Check your connection and try again.', {
+    const err = new ApiError('Could not reach the server. Check your connection and try again.', {
       code: 'NETWORK_ERROR',
       status: 0,
       cause,
     });
+    const canReplay = IDEMPOTENT.has(method) && attempt < RETRY_DELAYS_MS.length;
+    if (canReplay) {
+      // Jitter keeps a fleet of tabs from retrying in lockstep and re-creating
+      // the burst that dropped them.
+      await wait(RETRY_DELAYS_MS[attempt] + Math.random() * 250);
+      return rawRequest(path, { method, query, body, isForm, attempt: attempt + 1 });
+    }
+    throw err;
   }
+
+  if (RETRYABLE_STATUS.has(res.status) && attempt < RETRY_DELAYS_MS.length) {
+    await wait(RETRY_DELAYS_MS[attempt] + Math.random() * 250);
+    return rawRequest(path, { method, query, body, isForm, attempt: attempt + 1 });
+  }
+
   return parse(res);
 }
 

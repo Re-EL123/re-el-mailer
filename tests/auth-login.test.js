@@ -153,3 +153,35 @@ describe('login bookkeeping', () => {
     expect(recordLogin).not.toHaveBeenCalled();
   });
 });
+/**
+ * A rejected password reported "Your session is not valid. Please sign in
+ * again." on the sign-in form. AUTH_INVALID carries that text because it is the
+ * right description for an expired or tampered token, but on the login path it
+ * is simply false — there is no session yet. Someone read it as a broken
+ * session and went looking for one instead of retyping a password, which is
+ * how eight wrong attempts turned into a near lockout.
+ */
+describe('rejected credential message', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    verifyPassword.mockResolvedValue(false);
+  });
+
+  it('names the credential problem when the password is wrong', async () => {
+    findByEmail.mockResolvedValue(account());
+    const login = await loadHandler();
+    await expect(login(ctx())).rejects.toMatchObject({
+      code: 'AUTH_INVALID',
+      message: 'That email address and password do not match.',
+    });
+  });
+
+  it('gives an unknown address the same wording, so it leaks nothing', async () => {
+    findByEmail.mockResolvedValue(null);
+    const login = await loadHandler();
+    await expect(login(ctx())).rejects.toMatchObject({
+      code: 'AUTH_INVALID',
+      message: 'That email address and password do not match.',
+    });
+  });
+});

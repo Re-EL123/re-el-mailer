@@ -128,7 +128,11 @@ async function mailboxFor(ctx, { forSending = false } = {}) {
   return mailbox;
 }
 
-export default createHandler({
+// Held in a named object rather than inlined into createHandler() so the action
+// map can be exported: api/auth.js does the same, and without a seam the
+// draft-save statement could only be checked by deploying and editing a draft by
+// hand. That is how the reserved-word regression below went unnoticed.
+const handlerSpec = {
   name: 'mail',
   audit: {
     delete: { action: 'mail.delete', entityType: 'message' },
@@ -493,10 +497,15 @@ export default createHandler({
           // Recipients and threading are part of the draft, not decoration: an
           // update must overwrite everything the caller sent, not just the body,
           // otherwise a reply's recipients silently revert to the first save.
+          // The column is `references_text`, not `references`: the latter is a
+          // reserved word in Postgres, so the statement below was rejected with
+          // "syntax error at or near references" and *every* draft edit failed.
+          // The header list is stored as one space-separated string, matching
+          // createMessage(), so a round-trip does not change its shape.
           await query(
             `update public.messages
                 set to_emails = $3, cc_emails = $4, bcc_emails = $5,
-                    in_reply_to = $6, references = $7, thread_id = $8,
+                    in_reply_to = $6, references_text = $7, thread_id = $8,
                     subject = $9, body_html = $10, body_text = $11, snippet = $12
               where id = $1 and mailbox_id = $2`,
             [
@@ -506,7 +515,9 @@ export default createHandler({
               body.cc,
               body.bcc,
               body.inReplyTo ?? null,
-              body.references ?? [],
+              Array.isArray(body.references)
+                ? body.references.join(' ')
+                : (body.references ?? null),
               body.threadId ?? null,
               body.subject,
               html,
@@ -825,4 +836,8 @@ export default createHandler({
       },
     },
   },
-});
+};
+
+export const actions = handlerSpec.actions;
+
+export default createHandler(handlerSpec);

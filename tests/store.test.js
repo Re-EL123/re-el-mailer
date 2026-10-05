@@ -154,3 +154,49 @@ describe('roles', () => {
     expect(store.isOwner()).toBe(true);
   });
 });
+/**
+ * Remembering that this browser was signed in.
+ *
+ * The access token is memory-only, so a page load has to rebuild it from the
+ * httpOnly cookie. When that call failed because the network dropped, boot()
+ * rendered the sign-in form — indistinguishable from being signed out, and on a
+ * weak connection it happened constantly.
+ *
+ * This hint is what lets boot() tell "cannot reach the server" apart from "the
+ * server rejected you". It must therefore never be treated as a session, and
+ * never outlive an explicit sign-out.
+ */
+describe('last known user', () => {
+  it('records who was signed in when a session is adopted', async () => {
+    const store = await loadStore();
+    store.adoptSession(session);
+    expect(store.lastKnownUser()).toMatchObject({ email: 'a@re-el.co.za' });
+  });
+
+  it('stores no token or session id', async () => {
+    const store = await loadStore();
+    store.adoptSession(session);
+    const raw = globalThis.localStorage.getItem('reel.lastUser');
+    expect(raw).toBeTruthy();
+    expect(raw).not.toContain('token_abc');
+    expect(Object.keys(JSON.parse(raw)).sort()).toEqual(['at', 'displayName', 'email']);
+  });
+
+  it('is forgotten on an explicit sign-out', async () => {
+    const store = await loadStore();
+    store.adoptSession(session);
+    store.resetState();
+    expect(store.lastKnownUser()).toBeNull();
+  });
+
+  it('returns null for a first-time visitor', async () => {
+    const store = await loadStore();
+    expect(store.lastKnownUser()).toBeNull();
+  });
+
+  it('survives corrupt storage instead of breaking boot', async () => {
+    const store = await loadStore();
+    globalThis.localStorage.setItem('reel.lastUser', '{not json');
+    expect(store.lastKnownUser()).toBeNull();
+  });
+});

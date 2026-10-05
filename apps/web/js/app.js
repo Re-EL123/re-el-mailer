@@ -13,6 +13,7 @@ import {
   activeMailbox,
   applyTheme,
   isAdmin,
+  lastKnownUser,
   loadLocalPrefs,
   loadSession,
   loadSettings,
@@ -113,7 +114,7 @@ function enterPublic() {
 }
 
 /**
- * Mount the mail shell and point the router at it.
+ * Mount a mail shell and point the router at it.
  *
  * This is the counterpart to `enterPublic()`: the router keeps its single
  * hashchange listener and only changes which container it renders into, so a
@@ -124,6 +125,83 @@ function enterShell() {
   mount(document.getElementById('root'), buildShell());
   setRouterContainer(viewRoot);
   loadSettings().catch(() => {});
+}
+
+/**
+ * Reconnecting screen for a boot that failed to reach the API.
+ *
+ * The alternative — falling through to the sign-in form — is indistinguishable
+ * from being signed out, which is both untrue and alarming. This keeps the user
+ * informed, retries on its own while the tab is visible, and gives up only when
+ * the server actually refuses the session.
+ */
+function mountOffline(container, lastUser) {
+  let attempts = 0;
+  let stopped = false;
+  let timer = null;
+
+  const status = el('p', { class: 'muted', text: 'Trying to reconnect…' });
+  const retry = el('button', { class: 'btn btn-primary', type: 'button', text: 'Retry now' });
+  const wrap = el(
+    'div',
+    { class: 'auth-wrap' },
+    el('h1', { text: 'Connection lost' }),
+    el(
+      'p',
+      { text: `We could not reach Re-EL Mailer, so we cannot confirm your sign-in for ${lastUser.email} yet. You are not signed out.` },
+    ),
+    status,
+    retry,
+    el('a', { href: '#/', class: 'muted', text: 'Sign in with a different account' }),
+  );
+
+  // Back off, but stay responsive: the first few attempts are close together,
+  // then settle at a steady cadence rather than hammering the API.
+  const nextDelay = () => Math.min(1000 * 2 ** attempts++, 15000);
+
+  async function attempt() {
+    if (stopped) return;
+    retry.disabled = true;
+    try {
+      const user = await loadSession();
+      // Only a real session gets you in. If the server answers but rejects the
+      // cookie, the sign-in form is the honest answer.
+      if (!user) throw new Error('rejected');
+      stopped = true;
+      const { name } = currentRoute();
+      enterShell();
+      if (!name || name === 'login' || name === '') navigate('inbox', { replace: true });
+      return;
+    } catch (err) {
+      if (err?.code !== 'NETWORK_ERROR') {
+        stopped = true;
+        navigate('', { replace: true });
+        return;
+      }
+      attempts += 1;
+      status.textContent = `Still trying… (attempt ${attempts})`;
+      retry.disabled = false;
+      // Do not keep polling a tab nobody is looking at.
+      if (document.visibilityState === 'visible') timer = setTimeout(attempt, nextDelay());
+    }
+  }
+
+  retry.addEventListener('click', () => {
+    clearTimeout(timer);
+    attempts = 0;
+    attempt();
+  });
+
+  // A tab restored from the background is the most likely moment for the network
+  // to be healthy again, so reconnect the moment it becomes visible.
+  document.addEventListener('visibilitychange', () => {
+    if (stopped || document.visibilityState !== 'visible') return;
+    clearTimeout(timer);
+    attempt();
+  });
+
+  mount(container, wrap);
+  attempt();
 }
 
 /* ── Routes ────────────────────────────────────────────────────────────── */
@@ -201,10 +279,22 @@ async function boot() {
   });
 
   let user = null;
+  let bootError = null;
   try {
     user = await loadSession(); // restores from refresh cookie
-  } catch {
-    user = null;
+  } catch (err) {
+    bootError = err;
+  }
+
+  // A request that never arrived is not the same as a rejected session. Treating
+  // the two alike sent a signed-in user to the sign-in form every time the
+  // connection wobbled, which they reasonably read as being logged out. Retry
+  // quietly first, then say plainly that the connection is the problem.
+  if (bootError && bootError.code === 'NETWORK_ERROR' && lastKnownUser()) {
+    enterPublic();
+    startRouter(document.getElementById('auth-view'));
+    mountOffline(document.getElementById('auth-view'), lastKnownUser());
+    return;
   }
 
   const { name } = currentRoute();

@@ -168,7 +168,15 @@ export const actions = {
           } else {
             logger.warn('Login attempt for an unknown address', { ip: ctx.ip, requestId: ctx.requestId });
           }
-          throw new AppError(Codes.AUTH_INVALID, undefined, 401);
+          // Overridden deliberately: AUTH_INVALID's shared text is "Your session
+          // is not valid. Please sign in again.", which is correct when an
+          // expired token is rejected but nonsense on a sign-in form. Reading it
+          // there sent people hunting for a session problem instead of a typo.
+          throw new AppError(
+            Codes.AUTH_INVALID,
+            'That email address and password do not match.',
+            401,
+          );
         }
 
         if (account.status !== 'active') {

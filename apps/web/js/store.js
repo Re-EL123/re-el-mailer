@@ -161,7 +161,45 @@ export function adoptSession(data) {
   if (!state.activeMailboxId && mailboxes.length) {
     saveMailbox(mailboxes[0].id);
   }
+  rememberSignedIn(data.user);
   return data.user;
+}
+
+/* ── Last known user ──────────────────────────────────────────────────────── */
+
+const LS_LAST_USER = 'reel.lastUser';
+
+/**
+ * A non-sensitive note that this browser was last signed in, and as whom.
+ *
+ * This is never an authorisation. It exists so that a dropped connection during
+ * boot can be told apart from a genuine sign-out: without it, a page load that
+ * fails to reach the API lands on the sign-in form, which reads as "you have
+ * been logged out" and — on a weak connection — happens constantly.
+ *
+ * Only the display name and address are stored. No token, no session id.
+ */
+export function rememberSignedIn(user) {
+  if (!user) return;
+  try {
+    localStorage.setItem(
+      LS_LAST_USER,
+      JSON.stringify({ email: user.email, displayName: user.displayName || '', at: Date.now() }),
+    );
+  } catch {
+    /* private mode or a full quota; the hint is optional */
+  }
+}
+
+export function lastKnownUser() {
+  try {
+    const raw = localStorage.getItem(LS_LAST_USER);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed.email === 'string' ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Load the signed-in user's session + mailboxes; throws if not signed in. */
@@ -178,6 +216,14 @@ export async function loadSettings() {
 /** Clear all auth state on sign-out. */
 export function resetState() {
   setAccessToken(null);
+  // Drop the hint too: this is an explicit sign-out, and leaving it behind would
+  // make the next offline page load claim to be reconnecting a session the user
+  // deliberately ended.
+  try {
+    localStorage.removeItem(LS_LAST_USER);
+  } catch {
+    /* nothing to clean up */
+  }
   setState({
     user: null,
     session: null,
