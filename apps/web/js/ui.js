@@ -156,6 +156,22 @@ export function displayName(person) {
   return person.name || person.email || '';
 }
 
+/**
+ * "Ada Lovelace <ada@example.com>" — displayName with the address kept.
+ *
+ * displayName drops the address because compact rows need the space, but a
+ * reading pane is where you verify who is actually on the other end, and a name
+ * alone is exactly what a forged From line hands you. This is the same person
+ * with the part displayName omits.
+ */
+export function fullAddress(person) {
+  if (typeof person === 'string') return person;
+  const name = (person?.name || '').trim();
+  const email = (person?.email || '').trim();
+  if (!name) return email;
+  return email ? `${name} <${email}>` : name;
+}
+
 export function initials(person) {
   const name = displayName(person).trim();
   if (!name) return '?';

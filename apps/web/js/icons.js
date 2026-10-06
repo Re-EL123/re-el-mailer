@@ -32,6 +32,7 @@ export const ICONS = {
   forward: stroke('M5 12h14', 'm12 5 7 7-7 7'),
   reply: stroke('m9 17-5-5 5-5', 'M4 12h11a4 4 0 0 1 4 4v3'),
   replyAll: stroke('m7 17-5-5 5-5', 'M2 12h11a4 4 0 0 1 4 4v3', 'm12 17-5-5 5-5', 'M7 12h11a4 4 0 0 1 4 4v3'),
+  pencil: stroke('M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z', 'm15 5 4 4'),
 
   trash: stroke(
     'M3 6h18',

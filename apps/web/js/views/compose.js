@@ -43,6 +43,37 @@ export async function renderCompose(container, ctx) {
       const data = await api.send.forward(ctx.query.forward, true, mailboxId);
       seed = data.draft;
     } catch { /* fall through to blank */ }
+  } else if (ctx.query.draft) {
+    // Resuming a draft, not replying: the message is loaded and its every field
+    // put back, so closing the composer and reopening it later is lossless. The
+    // isDraft guard keeps an ordinary message id from being loaded here, which
+    // would turn "read this mail" into "quietly resend its contents".
+    try {
+      const data = await api.mail.get(ctx.query.draft, mailboxId);
+      const draft = data?.message;
+      if (!draft?.isDraft) throw new Error('That message is not a draft.');
+      draftId = draft.id;
+      seed = {
+        to: draft.to || [],
+        cc: draft.cc || [],
+        bcc: draft.bcc || [],
+        subject: draft.subject || '',
+        // The HTML is what the editor should open with; the text is what the
+        // fallback textarea holds and what a plain-text client gets.
+        html: draft.bodyHtml || '',
+        text: draft.bodyText || '',
+        attachments: draft.attachments || [],
+        threadId: draft.threadId || null,
+        inReplyTo: draft.inReplyTo || null,
+        references: draft.references || [],
+      };
+    } catch {
+      // Nothing to resume: start blank. draftId must be cleared too, or the
+      // composer would keep saving ("updating") against the id that failed to
+      // load — for a message that is not a draft that means editing an id the
+      // server will keep rejecting.
+      draftId = null;
+    }
   }
 
   const form = el('form', { class: 'compose-form', novalidate: true });
@@ -274,7 +305,7 @@ export async function renderCompose(container, ctx) {
         const { createEditor } = await import('../vendor/editor.bundle.js');
 
       editor = await createEditor(editorHost, {
-        content: plainText || seed.text || '',
+        content: initialHtml || plainText || seed.text || '',
         placeholder: 'Write your message…',
         onChange: (text) => setPlainText(text),
       });
@@ -344,6 +375,11 @@ export async function renderCompose(container, ctx) {
     ? `\n\n${seed.quotedText}`
     : seed.text || '';
   setPlainText(quoted.trim() ? quoted : '');
+
+  // A resumed draft is reopened as it was stored: the HTML goes to the editor
+  // and the text alternative stays in plainText. Reply and forward drafts never
+  // set seed.html, so their quoted history still starts plain.
+  const initialHtml = seed.html || '';
 
   // Attachments already on this draft, tracked so chips accumulate across uploads.
   // The send request itself carries no attachment list: the API falls back to the
@@ -506,7 +542,9 @@ export async function renderCompose(container, ctx) {
       class: 'compose-title',
       text: ctx.query.reply
         ? ctx.query.mode === 'all' ? 'Reply all' : 'Reply'
-        : ctx.query.forward ? 'Forward' : 'New message',
+        : ctx.query.forward ? 'Forward'
+        : draftId ? 'Edit draft'
+        : 'New message',
     }),
     form,
   ));

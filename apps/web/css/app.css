@@ -270,8 +270,10 @@ textarea { resize: vertical; }
 .reader-subject { margin: 0 0 8px; font-size: 22px; }
 .reader-meta { display: grid; gap: 3px; }
 .hdr { display: flex; gap: 8px; font-size: 14px; }
-.hdr-label { color: var(--muted); min-width: 44px; }
-.hdr-value { font-weight: 500; }
+.hdr-label { color: var(--muted); min-width: 44px; flex: none; }
+/* Addresses wrap (overflow-wrap rather than break-all keeps readable words),
+   because a header can now be a dozen To recipients or one very long address. */
+.hdr-value { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
 .reader-body { padding: 20px 16px 60px; max-width: 860px; }
 .reader-text { white-space: pre-wrap; font: inherit; margin: 0; }
 .reader-html { line-height: 1.6; }
@@ -522,8 +524,13 @@ textarea { resize: vertical; }
   .mail-layout { grid-template-columns: 1fr; }
   .sidebar { position: fixed; inset: auto 0 0 0; height: auto; max-height: 45vh; z-index: 10; border-right: none; border-top: 1px solid var(--border); }
   .mail-main { padding-bottom: 45vh; }
-  .user-name, .search { display: none; }
+  .user-name { display: none; }
   .mailbox-select { max-width: 150px; }
+  /* Search was display:none here, which removed the one way to find mail on a
+     phone. It now takes the whole second line under the folder title, wide
+     enough to tap rather than the 320px cap the desktop row needs to share. */
+  .list-title-row { flex-wrap: wrap; }
+  .search { order: 3; flex-basis: 100%; max-width: none; margin-left: 0; }
 }
 
 /* ── Skip link ───────────────────────────────────────────────────────────────

@@ -130,6 +130,11 @@ function listItem(row) {
 function detailItem(row) {
   return {
     ...listItem(row),
+    // Bcc is what a message copied itself with, so list rows never carry it; the
+    // reading pane does not need it either. The composer does: resuming a draft
+    // has to repopulate every field the user may later send, and Bcc would
+    // silently vanish between close and reopen otherwise.
+    bcc: row.bcc_emails ?? [],
     bodyHtml: row.body_html,
     bodyText: row.body_text,
     readAt: row.read_at,

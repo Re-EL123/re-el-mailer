@@ -5,14 +5,16 @@
 
 import { api } from '../api.js';
 import { mountMessageFrame } from '../body-frame.js';
-import { displayName, el, fullDate, formatBytes, mount, skeletonCards, toast } from '../ui.js';
+import { displayName, el, formatBytes, fullAddress, fullDate, mount, skeletonCards, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { navigate, refresh } from '../router.js';
 import { pushShortcuts } from '../keys.js';
 
 function headerLine(label, value) {
   if (!value || (Array.isArray(value) && value.length === 0)) return null;
-  const text = Array.isArray(value) ? value.map(displayName).join(', ') : displayName(value);
+  // fullAddress, not displayName: a header is where the address is verified.
+  // The name alone is what a spoofed From line makes unreassuring.
+  const text = Array.isArray(value) ? value.map(fullAddress).join(', ') : fullAddress(value);
   return el('div', { class: 'hdr' }, el('span', { class: 'hdr-label', text: label }), el('span', { class: 'hdr-value', text }));
 }
 
@@ -119,6 +121,10 @@ export async function renderMessage(container, ctx) {
           'div',
           { class: 'reader-toolbar' },
           el('button', { class: 'icon-btn', title: 'Back', 'aria-label': 'Back to list', onClick: () => history.back() }, icon('back')),
+          // A draft opens read-only: this is the way to pick it back up. The
+          // composer reloads the message by id, so nothing beyond the id is
+          // passed and the stored body, recipients and attachments all return.
+          msg.isDraft ? el('button', { class: 'icon-btn', title: 'Edit', 'aria-label': 'Edit draft', onClick: () => navigate(`compose?draft=${msg.id}&mailbox=${mailboxId}`) }, icon('pencil')) : null,
           // aria-pressed carries the starred state: the icon alone distinguishes
           // the two only by fill, which a screen reader cannot perceive.
           el('button', { class: 'icon-btn', title: msg.isStarred ? 'Unstar' : 'Star', 'aria-label': msg.isStarred ? 'Remove star' : 'Star this message', 'aria-pressed': String(Boolean(msg.isStarred)), onClick: async () => {

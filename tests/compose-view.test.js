@@ -20,6 +20,7 @@ import { audit, describeViolations, fakeMailboxes, fakeUser, resetDom, waitFor }
 vi.mock('../apps/web/js/api.js', () => ({
   api: {
     mail: {
+      get: vi.fn(async () => ({ message: null })),
       saveDraft: vi.fn(async () => ({ draft: { id: 'drf_1' } })),
       deleteDraft: vi.fn(async () => ({ ok: true })),
       attachmentUploadUrl: vi.fn(),
@@ -122,6 +123,7 @@ beforeEach(() => {
   setState({ user: fakeUser(), mailboxes: fakeMailboxes(), activeMailboxId: MB, pageSize: 30 });
   api.send.send.mockClear();
   api.mail.saveDraft.mockClear();
+  api.mail.get.mockClear();
 });
 
 describe('the plain-text fallback', () => {
@@ -269,6 +271,76 @@ describe('reply-all', () => {
 
     expect(api.send.reply).toHaveBeenCalledWith('msg_1', 'sender', MB);
     expect(container.querySelector('.compose-title').textContent).toBe('Reply');
+  });
+});
+
+describe('resuming a draft', () => {
+  const draft = () => ({
+    id: 'drf_1',
+    isDraft: true,
+    to: ['alice@example.com'],
+    cc: ['cc@example.com'],
+    bcc: ['bcc@example.com'],
+    subject: 'Notes',
+    bodyHtml: '<p>Hello <strong>draft</strong></p>',
+    bodyText: 'Hello draft',
+    threadId: 'thr_9',
+    inReplyTo: '<x@example.com>',
+    references: ['<a@example.com>'],
+    attachments: [{ id: 'att_1', filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 3 }],
+  });
+
+  it('puts every field of the draft back into the composer', async () => {
+    api.mail.get.mockResolvedValueOnce({ message: draft() });
+    const container = host();
+    await renderCompose(container, { query: { draft: 'drf_1', mailbox: MB } });
+
+    expect(api.mail.get).toHaveBeenCalledWith('drf_1', MB);
+    // Resuming is an edit, not a new message: the heading has to say so.
+    expect(container.querySelector('.compose-title').textContent).toBe('Edit draft');
+
+    const [toInput, ccInput, bccInput] = container.querySelectorAll('.compose-recipients');
+    expect(toInput.value).toBe('alice@example.com');
+    expect(ccInput.value).toBe('cc@example.com');
+    expect(bccInput.value).toBe('bcc@example.com');
+    expect(container.querySelector('.compose-subject').value).toBe('Notes');
+
+    // Attachments already stored against the draft are listed, not re-uploaded.
+    expect(container.querySelector('.attach-chip').textContent).toContain('a.pdf');
+  });
+
+  it('opens the editor with the stored HTML, not a flattened copy', async () => {
+    api.mail.get.mockResolvedValueOnce({ message: draft() });
+    const container = host();
+    await renderCompose(container, { query: { draft: 'drf_1', mailbox: MB } });
+    await waitFor('.editor-surface', container);
+
+    // Passing the HTML through the seed means a resumed draft keeps its
+    // formatting; the getText() here is the composer's content argument.
+    expect(editorInstance.getText()).toBe('<p>Hello <strong>draft</strong></p>');
+  });
+
+  it('keeps the plain-text body reachable when the editor cannot start', async () => {
+    editorShouldFail = true;
+    api.mail.get.mockResolvedValueOnce({ message: draft() });
+    const container = host();
+    await renderCompose(container, { query: { draft: 'drf_1', mailbox: MB } });
+
+    const area = container.querySelector('textarea.compose-body');
+    expect(area.hidden).toBe(false);
+    expect(area.value).toBe('Hello draft');
+  });
+
+  it('refuses to load a message that is not a draft', async () => {
+    api.mail.get.mockResolvedValueOnce({
+      message: { id: 'msg_9', isDraft: false, to: ['alice@example.com'], subject: 'Sent mail' },
+    });
+    const container = host();
+    await renderCompose(container, { query: { draft: 'msg_9', mailbox: MB } });
+
+    // A plain message is read-only; it must not become an editable draft.
+    expect(container.querySelector('.compose-title').textContent).toBe('New message');
+    expect(container.querySelector('.compose-recipients').value).toBe('');
   });
 });
 

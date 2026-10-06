@@ -35,12 +35,12 @@ const SAFE_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
  * timeout rather than a failure. Callers wait on `.reader-toolbar`, which is
  * rendered either way.
  */
-async function mountReader(bodyHtml) {
+async function mountReader(bodyHtml, overrides = {}) {
   const container = document.createElement('div');
   document.body.append(container);
 
   stubApi(defaultRoutes({
-    'action=get': { message: fakeMessage({ bodyHtml, bodyText: 'fallback' }), thread: [] },
+    'action=get': { message: fakeMessage({ bodyHtml, bodyText: 'fallback', ...overrides }), thread: [] },
   }));
 
   const { adoptSession } = await import('../apps/web/js/store.js');
@@ -131,5 +131,70 @@ describe('message body iframe', () => {
     // A body that is only ever text should not load a document at all.
     expect(frame).toBeNull();
     expect(container.querySelector('.reader-body').textContent).toContain('fallback');
+  });
+});
+
+describe('the identity headers', () => {
+  const valueOf = (container, label) => {
+    const headers = [...container.querySelectorAll('.hdr')];
+    const line = headers.find((hdr) => hdr.querySelector('.hdr-label')?.textContent === label);
+    return line ? line.querySelector('.hdr-value').textContent : null;
+  };
+
+  it('shows the address alongside the sender name', async () => {
+    const { container } = await mountReader('<p>Hello</p>');
+
+    // displayName alone would render "Bob Nkosi" with no way to verify who
+    // actually sent it; the header is where that verification happens.
+    expect(valueOf(container, 'From')).toBe('Bob Nkosi <bob@example.com>');
+  });
+
+  it('falls back to the bare address when the sender has no name', async () => {
+    const { container } = await mountReader('<p>Hello</p>', {
+      from: { email: 'noreply@example.com', name: '' },
+    });
+
+    expect(valueOf(container, 'From')).toBe('noreply@example.com');
+  });
+
+  it('lists every recipient on the To line', async () => {
+    const { container } = await mountReader('<p>Hello</p>', {
+      to: [{ email: 'ada@re-el.co.za' }, { email: 'second@example.com' }],
+    });
+
+    expect(valueOf(container, 'To')).toBe('ada@re-el.co.za, second@example.com');
+  });
+
+  it('renders a Cc line when there is one, and omits it when there is not', async () => {
+    const { container } = await mountReader('<p>Hello</p>', {
+      cc: [{ email: 'cc@example.com', name: 'Cee Cee' }],
+    });
+
+    expect(valueOf(container, 'Cc')).toBe('Cee Cee <cc@example.com>');
+  });
+
+  it('keeps the From line honest when the display name is outbound', async () => {
+    const { container } = await mountReader('<p>Hello</p>', {
+      direction: 'outbound',
+      from: { email: 'ada@re-el.co.za', name: 'Ada Lovelace' },
+      to: ['alice@example.com'],
+    });
+
+    expect(valueOf(container, 'From')).toBe('Ada Lovelace <ada@re-el.co.za>');
+    expect(valueOf(container, 'To')).toBe('alice@example.com');
+  });
+});
+
+describe('editing a draft from the reader', () => {
+  it('offers an edit button on a draft, and nothing on sent mail', async () => {
+    const draftView = await mountReader('<p>Hello</p>', {
+      isDraft: true,
+      direction: 'outbound',
+      to: ['alice@example.com'],
+    });
+    expect(draftView.container.querySelector('.reader-toolbar [aria-label="Edit draft"]')).toBeTruthy();
+
+    const sentView = await mountReader('<p>Hello</p>', { isDraft: false });
+    expect(sentView.container.querySelector('.reader-toolbar [aria-label="Edit draft"]')).toBeNull();
   });
 });
