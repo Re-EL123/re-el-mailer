@@ -223,6 +223,7 @@ textarea { resize: vertical; }
 .list-title-row { display: flex; align-items: center; gap: 12px; }
 .list-title { margin: 0; font-size: 20px; }
 .search { max-width: 320px; margin-left: auto; }
+.list-title-row .icon-btn { flex: none; }
 
 .list-actions {
   display: flex; align-items: center; gap: 8px;
@@ -275,11 +276,18 @@ textarea { resize: vertical; }
 .reader-text { white-space: pre-wrap; font: inherit; margin: 0; }
 .reader-html { line-height: 1.6; }
 
-/* Message bodies render in a sandboxed iframe with no allow-same-origin, so the
-   frame sizes itself from its content rather than being forced to a height. */
+/*
+ * Message bodies render in a sandboxed iframe with no allow-same-origin, so this
+ * page cannot read into it and the frame cannot size itself — an <iframe> with
+ * no height is a 150px-tall replaced element, which is how long messages ended
+ * up in a short box with a scrollbar inside it. body-frame.js measures the body
+ * in this document and writes an explicit height; `min-height` is only the floor
+ * for that measurement, and the frame still scrolls internally if a late-loading
+ * image grows it past the estimate.
+ */
 .reader-frame {
   width: 100%;
-  min-height: 120px;
+  min-height: 140px;
   border: 0;
   background: transparent;
   display: block;

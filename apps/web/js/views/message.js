@@ -4,6 +4,7 @@
  */
 
 import { api } from '../api.js';
+import { mountMessageFrame } from '../body-frame.js';
 import { displayName, el, fullDate, formatBytes, mount, skeletonCards, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { navigate, refresh } from '../router.js';
@@ -102,8 +103,10 @@ export async function renderMessage(container, ctx) {
 
   // Declared outside the try because the shortcut handlers below are registered
   // after it and close over the message; a `const` inside the block would not be
-  // in scope there.
+  // in scope there. `bodyFrame` likewise, so the router's cleanup can tear it
+  // down whichever path the load took.
   let msg = null;
+  let bodyFrame = null;
 
   async function load() {
     try {
@@ -126,6 +129,11 @@ export async function renderMessage(container, ctx) {
           } }, icon('trash')),
           el('button', { class: 'icon-btn', title: 'Reply', 'aria-label': 'Reply', onClick: () => navigate(`compose?reply=${msg.id}&mailbox=${mailboxId}`) }, icon('reply')),
           el('button', { class: 'icon-btn', title: 'Forward', 'aria-label': 'Forward', onClick: () => navigate(`compose?forward=${msg.id}&mailbox=${mailboxId}`) }, icon('forward')),
+          // Re-fetches just this message. Worth its own control because the
+          // reader is the one place where staleness is invisible: a reply that
+          // arrived, a flag changed on another device, or a thread that grew all
+          // show as the state you left them in until something navigates.
+          el('button', { class: 'icon-btn', title: 'Refresh', 'aria-label': 'Refresh this message', onClick: () => refresh() }, icon('refresh')),
           labelControl(msg, mailboxId),
         ),
         el('h2', { class: 'reader-subject', text: msg.subject || '(no subject)' }),
@@ -143,29 +151,12 @@ export async function renderMessage(container, ctx) {
 
       // Render body: sanitised HTML in a sandboxed frame, else plain text.
       if (msg.bodyHtml) {
-        // Message bodies are sender-controlled, so they are never mounted as
-        // live DOM. The server sanitises on ingest and send; this iframe adds the
-        // browser-enforced backstop, with a restrictive sandbox that still allows
-        // styling and images but not scripts, forms or same-origin access.
-        const frame = el('iframe', {
-          class: 'reader-frame',
-          title: 'Message body',
-          sandbox: 'allow-popups allow-popups-to-escape-sandbox',
-          referrerpolicy: 'no-referrer',
-          loading: 'lazy',
-        });
-        frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8">
-<base target="_blank"><meta name="referrer" content="no-referrer">
-<style>
-  html,body{margin:0;padding:0;background:transparent;color:#1b2437;overflow-wrap:anywhere}
-  body{font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:4px 2px}
-  img{max-width:100%;height:auto}
-  table{max-width:100%}
-  a{color:#21396A}
-  blockquote{margin:0;padding-left:12px;border-left:3px solid #d7deec;color:#4a5468}
-  @media (prefers-color-scheme:dark){body{color:#e6ebf5}a{color:#8fb0ff}}
-</style></head><body>${msg.bodyHtml}</body></html>`;
-        body.append(el('div', { class: 'reader-html' }, frame));
+        // `mountMessageFrame` owns the sandbox tokens, the theme and the
+        // sizing; the reader just places it. The comment that used to live
+        // here — claiming the frame sizes itself from its content — was the
+        // bug: without allow-same-origin this page cannot read into it, so
+        // nothing could size it, and every body sat in a 150px strip.
+        bodyFrame = mountMessageFrame(msg.bodyHtml, body);
       } else if (msg.bodyText) {
         body.append(el('pre', { class: 'reader-text', text: msg.bodyText }));
       } else {
@@ -228,5 +219,8 @@ export async function renderMessage(container, ctx) {
   mount(container, el('div', { class: 'reader' }, head, body));
   await load();
 
-  return () => popShortcuts();
+  return () => {
+    popShortcuts();
+    bodyFrame?.destroy();
+  };
 }

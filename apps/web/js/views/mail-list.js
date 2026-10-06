@@ -205,11 +205,21 @@ export async function renderMailList(container, ctx) {
     if (event.key === 'Enter') onSearch(event.target.value.trim());
   });
 
+  // Re-fetches the folder. Mail arrives while this page is open and counts go
+  // stale, but there was no way to pull without leaving and coming back.
+  const refreshButton = el('button', {
+    class: 'icon-btn',
+    title: 'Refresh',
+    'aria-label': `Refresh ${title}`,
+    onClick: () => refresh(),
+  }, icon('refresh'));
+
   mount(
     headerNode,
     el('div', { class: 'list-title-row' },
       el('h2', { class: 'list-title', text: title }),
       searchInput,
+      refreshButton,
     ),
   );
 
@@ -310,6 +320,9 @@ export async function renderMailList(container, ctx) {
     // `u` unreads on a folder list but is "go back" in a reading pane; the reader
     // registers its own binding, which takes priority over this one.
     u: () => actOnTargets((ids) => api.mail.markRead(ids, false, mailboxId)),
+    // Refresh the list. The reader binds `r` to reply in its own scope, which
+    // sits above this one, so opening a message swaps the meaning correctly.
+    r: () => refresh(),
   });
 
   let messages = [];

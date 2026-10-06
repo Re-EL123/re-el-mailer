@@ -1,0 +1,330 @@
+/**
+ * Sandboxed frames for HTML message bodies.
+ *
+ * A message body is sender-controlled, so it is never mounted as live DOM: the
+ * server sanitises it on ingest and on send, and this iframe is the
+ * browser-enforced backstop if the sanitiser is ever wrong. That part is
+ * unchanged by anything below.
+ *
+ * What this module fixes is the presentation, in two steps:
+ *
+ * 1. Height. A cross-origin frame with no `allow-same-origin` cannot be read by
+ *    this page — `frame.contentDocument` is null — so nothing here can ask the
+ *    frame how tall it is. An `<iframe>` with no height is a replaced element
+ *    with a 150px intrinsic height, which is why long messages were trapped in a
+ *    short box with a scrollbar inside it. So the height is measured in this
+ *    document instead: the HTML is parsed with DOMParser, which creates an inert
+ *    document that runs no scripts and fires no handlers, adopted into a hidden
+ *    host, and read back. Only the resulting *number* ever crosses into the
+ *    frame; the markup never runs here.
+ *
+ *    Images have no size until they load, so the first measurement is taken
+ *    immediately (text is laid out already) and a second one follows once the
+ *    images have settled. Both happen in the same hidden host, so the frame's
+ *    own requests usually hit the warm cache rather than going out twice.
+ *
+ * 2. Theme. The frame follows the app's `[data-theme]`, not the operating
+ *    system's `prefers-color-scheme`. They are independent — a light-mode OS
+ *    with the app in dark mode left dark text on a transparent background over
+ *    a dark page, which was unreadable.
+ */
+
+import { el } from './ui.js';
+
+/**
+ * The only sandbox tokens the reader grants.
+ *
+ * Never add `allow-scripts` or `allow-same-origin`: on their own neither can do
+ * anything here, but together they void the sandbox entirely and let sender
+ * markup reach this page's origin.
+ */
+export const BODY_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
+
+/** Smallest box a body is ever given, so a short message still looks like one. */
+const MIN_HEIGHT = 140;
+
+/**
+ * Height used where there is no layout engine to read.
+ *
+ * jsdom has no layout, so `scrollHeight` is always 0 there. Treating 0 as "not
+ * measured yet" rather than "empty" keeps the shipped value sensible instead of
+ * pinning every test body to the minimum.
+ */
+const FALLBACK_HEIGHT = 320;
+
+/** Longest to wait for the measuring pass's images before settling for text. */
+const IMAGE_WAIT_MS = 2500;
+
+const FONT = "font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif";
+
+/** Colours are read from the app's own tokens, not the OS colour scheme. */
+const THEMES = {
+  light: { text: '#1b2233', link: '#21396a', quote: '#4a5468', rule: '#d7deec' },
+  dark: { text: '#e8ebf2', link: '#8fb0ff', quote: '#9aa3b7', rule: '#2a3348' },
+};
+
+/** The active theme name, taken from the document the app is currently drawing. */
+export function activeTheme() {
+  return document.documentElement?.dataset?.theme === 'dark' ? 'dark' : 'light';
+}
+
+/**
+ * The stylesheet inside the frame.
+ *
+ * Shared with the measuring host so both lay the same content out the same way:
+ * if they disagreed, every measured height would be wrong by the difference.
+ */
+function frameStyles(theme) {
+  const c = THEMES[theme];
+  return `
+    html, body { margin: 0; padding: 0; background: transparent; color: ${c.text}; overflow-wrap: anywhere; }
+    body { ${FONT}; padding: 4px 2px; }
+    img { max-width: 100%; height: auto; }
+    table { max-width: 100%; border-collapse: collapse; }
+    td, th { word-break: break-word; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    a { color: ${c.link}; }
+    blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 3px solid ${c.rule}; color: ${c.quote}; }
+    hr { border: 0; border-top: 1px solid ${c.rule}; margin: 12px 0; }
+  `;
+}
+
+/** The frame document. */
+function srcdoc(html, theme) {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<base target="_blank"><meta name="referrer" content="no-referrer">
+<style>${frameStyles(theme)}</style>
+</head><body>${html}</body></html>`;
+}
+
+/**
+ * Strip anything that could execute, from a parsed document, before it is moved
+ * into this one.
+ *
+ * This is the step that makes the measurement safe. Parsing with DOMParser is
+ * inert by itself — the resulting document has no browsing context, so nothing
+ * runs — but these nodes are about to be appended to a live document, where an
+ * inline handler would fire and a script would run *at insertion*, before
+ * anything after it in this function had a chance to help. Removing them while
+ * they are still in the inert document means there is never a moment when the
+ * live document holds them.
+ *
+ * Every removal here is layout-neutral, which is why it does not change the
+ * number: a script contributes no box, an event handler contributes no box, and
+ * a nested frame that cannot load anything contributes an empty one.
+ */
+function neutralise(root) {
+  for (const node of [...root.querySelectorAll('script, link[rel~="stylesheet"], iframe, object, embed')]) {
+    node.remove();
+  }
+  for (const node of root.querySelectorAll('*')) {
+    for (const attribute of [...node.attributes]) {
+      if (/^on/i.test(attribute.name)) node.removeAttribute(attribute.name);
+    }
+  }
+}
+
+/**
+ * Build a hidden host holding `html` laid out at `width`.
+ *
+ * `visibility: hidden` rather than `display: none`: hidden boxes still lay out
+ * and still load their images, which is the entire point of the host.
+ */
+function createMeasurer(html, width, theme) {
+  const host = document.createElement('div');
+  host.setAttribute('aria-hidden', 'true');
+  host.setAttribute('data-message-measurer', '');
+  host.style.cssText = [
+    'position:fixed',
+    'top:0',
+    'left:-100000px',
+    `width:${Math.max(1, Math.round(width))}px`,
+    'visibility:hidden',
+    'pointer-events:none',
+  ].join(';');
+
+  const parsed = new DOMParser().parseFromString(
+    `<!doctype html><html><head></head><body>${html || ''}</body></html>`,
+    'text/html',
+  );
+  neutralise(parsed);
+
+  /*
+   * The shadow tree mirrors the frame document element for element: a stylesheet,
+   * then a real <body>. Using <body> rather than a div matters — it is what the
+   * email's own `body { ... }` rules match, so a sender who styles the body is
+   * measured the way it renders, and a div would silently miss that.
+   *
+   * Both stylesheets go in as elements, in the frame's own order. An inline
+   * `style` attribute on the body would beat every email rule on specificity and
+   * change the number; as a sheet at the front it loses to theirs exactly as it
+   * does in the frame.
+   */
+  const shadow = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
+  const own = document.createElement('style');
+  own.textContent = frameStyles(theme);
+
+  const body = document.createElement('body');
+  shadow.append(own, body);
+
+  // An email's own stylesheet is normally in the <head>, and dropping it would
+  // make the measurement meaningless — a table sized by CSS would come out at a
+  // different height than the frame actually renders it. Kept inside the shadow
+  // root so it is scoped to this one tree and cannot reach the app.
+  for (const sheet of [...parsed.head.querySelectorAll('style')]) {
+    body.append(sheet);
+  }
+  while (parsed.body.firstChild) body.append(parsed.body.firstChild);
+
+  document.body.append(host);
+  return { host, body };
+}
+
+/**
+ * The laid-out height of a measuring host, in px.
+ *
+ * Margins are added back because `getBoundingClientRect` returns the border box
+ * and an email that sets `body { margin: 40px }` is 80px taller than that.
+ */
+function readHeight(body) {
+  const rect = body.getBoundingClientRect();
+
+  // The border box is the part that comes from actual layout. A box that has
+  // not been laid out at all measures 0, and that has to be told apart from a
+  // narrow one: jsdom applies the user-agent `body { margin: 8px }` to
+  // `getComputedStyle` while laying nothing out, so testing the *sum* below
+  // would return 16 and pin every message to MIN_HEIGHT instead of falling
+  // back.
+  if (!Number.isFinite(rect.height) || rect.height <= 0) return FALLBACK_HEIGHT;
+
+  const style = getComputedStyle(body);
+  const margins = (Number.parseFloat(style.marginTop) || 0)
+    + (Number.parseFloat(style.marginBottom) || 0);
+  return rect.height + margins;
+}
+
+/** Resolve once every image in `root` has loaded, failed, or timed out. */
+function imagesSettled(root, timeoutMs) {
+  const pending = [...root.querySelectorAll('img')]
+    .filter((img) => !img.complete)
+    .map((img) => new Promise((resolve) => {
+      img.addEventListener('load', resolve, { once: true });
+      img.addEventListener('error', resolve, { once: true });
+    }));
+
+  if (!pending.length) return Promise.resolve();
+
+  let timer = null;
+  return Promise.race([
+    Promise.all(pending),
+    new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Attach a self-sizing HTML body frame to `host`.
+ *
+ * The element is returned immediately with a text-height estimate already
+ * applied, so a body never appears inside an empty 150px strip while images are
+ * still in flight.
+ *
+ * @param {string} html sanitised message body
+ * @param {HTMLElement} host element to append the frame to
+ * @returns {{frame: HTMLIFrameElement, element: HTMLElement, destroy: () => void}}
+ */
+export function mountMessageFrame(html, host) {
+  const wrapper = el('div', { class: 'reader-html' });
+  const frame = el('iframe', {
+    class: 'reader-frame',
+    title: 'Message body',
+    sandbox: BODY_SANDBOX,
+    referrerpolicy: 'no-referrer',
+    loading: 'lazy',
+  });
+  wrapper.append(frame);
+  host.append(wrapper);
+
+  let destroyed = false;
+  let theme = activeTheme();
+
+  /** Read the current width of the frame's box, which is the wrapper's. */
+  const frameWidth = () => wrapper.clientWidth || frame.clientWidth || 0;
+
+  /**
+   * Take one measurement and set the frame's height from it.
+   *
+   * Creates a host, measures, and (when `withImages`) keeps it alive until the
+   * images have settled so the second reading is the accurate one. The host is
+   * always removed afterwards — nothing but its number survives.
+   */
+  /** Clamp and write a measurement, unless the frame has gone away. */
+  function setHeight(height) {
+    if (destroyed) return;
+    frame.style.height = `${Math.max(MIN_HEIGHT, Math.round(height))}px`;
+  }
+
+  async function applyHeight({ withImages = false } = {}) {
+    if (destroyed) return;
+
+    const { host: box, body: measured } = createMeasurer(html, frameWidth(), theme);
+
+    // Text is laid out already, so this reading is final for text-only bodies
+    // and merely a good first estimate for the rest. It is written straight
+    // through — before any await — so the frame is never left sitting at the
+    // 150px intrinsic height of an unmeasured <iframe>.
+    let height = readHeight(measured);
+    setHeight(height);
+
+    if (withImages) {
+      await imagesSettled(measured, IMAGE_WAIT_MS);
+      if (destroyed) {
+        box.remove();
+        return;
+      }
+      height = Math.max(height, readHeight(measured));
+    }
+
+    box.remove();
+    setHeight(height);
+  }
+
+  /** Re-apply theme and size from scratch — used when the theme changes. */
+  function restyle(nextTheme) {
+    theme = nextTheme;
+    frame.srcdoc = srcdoc(html, theme);
+    applyHeight({ withImages: true });
+  }
+
+  // First paint: text already has a height, images do not, so measure now and
+  // again once they are in.
+  frame.srcdoc = srcdoc(html, theme);
+  applyHeight({ withImages: true });
+
+  // Re-measure when the frame's box changes. Emails are mostly fixed-width
+  // tables, so a window narrower than the author's layout changes how they wrap
+  // and therefore how tall they are.
+  const onResize = () => applyHeight({ withImages: false });
+  window.addEventListener('resize', onResize);
+
+  // The frame has to follow the app theme, which lives on <html data-theme> and
+  // changes independently of the OS setting the frame's media query would see.
+  const observer = new MutationObserver((records) => {
+    if (destroyed) return;
+    const next = activeTheme();
+    if (next !== theme) restyle(next);
+  });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  return {
+    frame,
+    element: wrapper,
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      observer.disconnect();
+      window.removeEventListener('resize', onResize);
+    },
+  };
+}

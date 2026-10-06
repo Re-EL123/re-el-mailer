@@ -104,6 +104,13 @@ export const ICONS = {
   undo: stroke('M3 7v6h6', 'M3 13a9 9 0 1 0 3-7.7L3 8'),
   redo: stroke('M21 7v6h-6', 'M21 13a9 9 0 1 1-3-7.7L21 8'),
 
+  // A clockwise arc with an arrowhead: the standard reload gesture. Drawn as an
+  // arc rather than a full circle so it does not read as a close/cancel control.
+  refresh: stroke(
+    'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8',
+    'M21 3v5h-5',
+  ),
+
   keyboard: stroke('M20 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z', 'M6 9h.01', 'M10 9h.01', 'M14 9h.01', 'M18 9h.01', 'M8 13h8'),
 };
 
