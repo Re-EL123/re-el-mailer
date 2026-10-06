@@ -416,27 +416,36 @@ export async function renderCompose(container, ctx) {
   // Attachments go straight to storage: the file bytes never pass through the
   // API, which caps request bodies far below our attachment limit.
   async function uploadFile(draft, file) {
+    const mimeType = file.type || 'application/octet-stream';
+    // Field names are the server's, not this view's: attachment-upload-url and
+    // attachment-complete are validated by attachmentUploadUrlSchema and
+    // attachmentCompleteSchema, which strip anything they do not recognise. An
+    // `id` where a `draftId` is expected reads as "not provided" rather than
+    // "wrong", so the request fails with a missing-field error that says nothing
+    // about the name that caused it.
     const ticket = await api.mail.attachmentUploadUrl({
-      id: draft,
+      draftId: draft,
       filename: file.name,
-      contentType: file.type || 'application/octet-stream',
-      sizeBytes: file.size,
-      mailboxId,
+      mimeType,
+      size: file.size,
     });
 
     const response = await fetch(ticket.url, {
       method: 'PUT',
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      headers: { 'Content-Type': mimeType },
       body: file,
     });
     if (!response.ok) throw new Error(`Upload failed (${response.status})`);
 
     // Storage is not readable until the API confirms the object, so this call is
-    // what turns an upload into a message attachment.
+    // what turns an upload into a message attachment. It names the file and type
+    // again because the server re-verifies them against the stored object rather
+    // than trusting the ticket.
     const done = await api.mail.attachmentComplete({
-      id: ticket.id,
-      messageId: draft,
-      mailboxId,
+      draftId: draft,
+      attachmentId: ticket.attachmentId,
+      filename: file.name,
+      mimeType,
     });
     return done.attachment;
   }

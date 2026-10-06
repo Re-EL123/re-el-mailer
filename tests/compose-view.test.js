@@ -13,7 +13,7 @@
  * deliberately rather than depending on which one the environment happens to give.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { audit, describeViolations, fakeMailboxes, fakeUser, resetDom, waitFor } from './helpers/view-harness.js';
 
@@ -103,6 +103,9 @@ const { setState } = await import('../apps/web/js/store.js');
 const { api } = await import('../apps/web/js/api.js');
 const { renderCompose } = await import('../apps/web/js/views/compose.js');
 const { el } = await import('../apps/web/js/ui.js');
+// The schemas are the contract. Asserting against them rather than against a
+// hand-written expectation is what makes this catch a rename on either side.
+const { attachmentUploadUrlSchema, attachmentCompleteSchema } = await import('../packages/validation/schemas.js');
 
 const MB = 'mbx_1';
 
@@ -320,5 +323,77 @@ describe('teardown', () => {
     cleanup();
     // A leaked ProseMirror view keeps a MutationObserver on the document.
     expect(editorInstance.destroy).toHaveBeenCalled();
+  });
+});
+
+describe('attachments', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    api.mail.attachmentUploadUrl.mockReset();
+    api.mail.attachmentComplete.mockReset();
+  });
+
+  it('sends the field names the upload schemas actually validate', async () => {
+    api.mail.attachmentUploadUrl.mockResolvedValue({
+      draftId: 'drf_1',
+      attachmentId: 'att_1',
+      filename: 'a.pdf',
+      mimeType: 'application/pdf',
+      size: 3,
+      url: 'https://storage.example/signed',
+      path: 'p',
+    });
+    api.mail.attachmentComplete.mockResolvedValue({
+      attachment: { id: 'att_1', filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 3 },
+    });
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200 }));
+
+    const container = host();
+    await renderCompose(container, { query: {} });
+    await waitFor('.attach-input', container);
+
+    const input = container.querySelector('.attach-input');
+    const file = new File(['pdf'], 'a.pdf', { type: 'application/pdf' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(api.mail.attachmentUploadUrl).toHaveBeenCalled());
+
+    // Both requests are validated server-side before the handler runs, so a name
+    // the server does not recognise is reported as a missing field. Parsing the
+    // captured payloads against the shipped schemas fails here instead, at the
+    // exact place the drift happened.
+    const ticketArgs = api.mail.attachmentUploadUrl.mock.calls[0][0];
+    expect(() => attachmentUploadUrlSchema.parse(ticketArgs)).not.toThrow();
+    expect(ticketArgs).toMatchObject({ draftId: 'drf_1', filename: 'a.pdf', mimeType: 'application/pdf', size: 3 });
+
+    await vi.waitFor(() => expect(api.mail.attachmentComplete).toHaveBeenCalled());
+    const completeArgs = api.mail.attachmentComplete.mock.calls[0][0];
+    expect(() => attachmentCompleteSchema.parse(completeArgs)).not.toThrow();
+    expect(completeArgs).toMatchObject({
+      draftId: 'drf_1',
+      attachmentId: 'att_1',
+      filename: 'a.pdf',
+      mimeType: 'application/pdf',
+    });
+  });
+
+  it('keeps a failed upload from dropping the files already stored', async () => {
+    api.mail.attachmentUploadUrl.mockRejectedValueOnce(new Error('nope'));
+    const container = host();
+    await renderCompose(container, { query: {} });
+    await waitFor('.attach-input', container);
+
+    const input = container.querySelector('.attach-input');
+    const file = new File(['pdf'], 'a.pdf', { type: 'application/pdf' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(api.mail.attachmentUploadUrl).toHaveBeenCalled());
+    // The composer toasts rather than throwing, so the view is still usable.
+    expect(container.querySelector('form')).toBeTruthy();
+    expect(api.mail.attachmentComplete).not.toHaveBeenCalled();
   });
 });
