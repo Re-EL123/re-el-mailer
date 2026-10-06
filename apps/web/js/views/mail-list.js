@@ -231,6 +231,7 @@ export async function renderMailList(container, ctx) {
   const selected = new Set();
   const headerNode = el('div', { class: 'list-header' });
   const actionsNode = el('div', { class: 'list-actions', hidden: true });
+  const actionsCount = el('span', { class: 'list-actions-count' });
 
   const title =
     folderParam === 'starred'
@@ -287,7 +288,10 @@ export async function renderMailList(container, ctx) {
   function updateActions() {
     const has = selected.size > 0;
     actionsNode.hidden = !has;
-    if (has) actionsNode.textContent = `${selected.size} selected`;
+    // Update the count, not the whole bar: textContent on `actionsNode` used
+    // to replace the mounted buttons, so the very first selection made the
+    // actions vanish even though the bar had just appeared.
+    actionsCount.textContent = has ? `${selected.size} selected` : '';
   }
 
   function bulkButton(label, handler, danger = false) {
@@ -295,6 +299,10 @@ export async function renderMailList(container, ctx) {
       class: danger ? 'btn btn-danger btn-sm' : 'btn btn-sm',
       text: label,
       onClick: async () => {
+        // A bar that sits above an empty list (or a bar whose "hidden" styling
+        // is overridden) is clickable with nothing chosen; ids: [] then fails
+        // the API schema. Do nothing instead.
+        if (!selected.size) return;
         try {
           await handler();
           selected.clear();
@@ -309,6 +317,7 @@ export async function renderMailList(container, ctx) {
 
   mount(
     actionsNode,
+    actionsCount,
     bulkButton('Star', () => api.mail.star([...selected], true, mailboxId)),
     bulkButton('Archive', () => api.mail.move([...selected], 'archive', mailboxId)),
     bulkButton('Trash', () => api.mail.trash([...selected], mailboxId)),

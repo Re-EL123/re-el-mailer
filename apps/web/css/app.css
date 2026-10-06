@@ -225,11 +225,18 @@ textarea { resize: vertical; }
 .search { max-width: 320px; margin-left: auto; }
 .list-title-row .icon-btn { flex: none; }
 
+/* `display: flex` below would override the UA [hidden] rule and leave the bar
+   permanently visible above the list; nothing selected, the actions must not
+   be shown — clicking them with an empty selection used to fail the API's
+   min-1 ids schema with a generic validation error. */
+.list-actions[hidden] { display: none; }
+
 .list-actions {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 16px; border-bottom: 1px solid var(--border);
   background: var(--brand-050); font-weight: 600;
 }
+.list-actions-count { margin-right: auto; }
 
 /* ── Message rows ────────────────────────────────────────────────────── */
 
