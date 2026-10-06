@@ -21,7 +21,60 @@ const FOLDERS = [
   ['trash', 'Trash'],
 ];
 
+/**
+ * The identity line: who the message came from, or who it went to.
+ *
+ * Sent and Drafts are outbound, and the row used to be built as
+ * `displayName({ name: 'To', email: recipients })`. `displayName` returns the
+ * name in preference to the address, so that rendered the literal word "To"
+ * and threw every recipient away — the label and the value were passed as if
+ * `displayName` joined them, and it has never done that. The label and the
+ * addresses are composed here instead.
+ *
+ * The same string feeds the row's accessible name, so what a screen reader
+ * announces and what is on screen cannot drift apart again.
+ */
+function identityLine(msg) {
+  if (msg.direction !== 'outbound') return displayName(msg.from);
+
+  const to = msg.to || [];
+  const cc = msg.cc || [];
+  // A draft saved with a subject and nothing else still has to say what it is
+  // missing, so the label survives with no addresses behind it.
+  if (to.length) return `To: ${to.join(', ')}`;
+  if (cc.length) return `Cc: ${cc.join(', ')}`;
+  return 'To';
+}
+
+/**
+ * Delivery telemetry, shown only where it says something worth reading.
+ *
+ * `delivery_status` is `not null default 'unknown'`, `createMessage` defaults to
+ * it, and nothing ever writes it for received mail — so the previous condition
+ * (anything that is not `delivered` or `sent`) matched `unknown` and put an
+ * "unknown" chip on every row in the Inbox. What survives here are the states
+ * that need attention, named the way a person would say them rather than the way
+ * the column stores them.
+ *
+ * Gated on `outbound` as well as on the status, because a received message has
+ * no delivery telemetry at all and should never appear to.
+ */
+const DELIVERY_LABELS = {
+  queued: 'Queued',
+  bounced: 'Bounced',
+  complained: 'Spam complaint',
+  deferred: 'Delayed',
+};
+
+function deliveryTag(msg) {
+  if (msg.direction !== 'outbound') return null;
+  const label = DELIVERY_LABELS[msg.deliveryStatus];
+  if (!label) return null;
+  return el('span', { class: 'tag', title: `Delivery status: ${label}` }, label);
+}
+
 function messageRow(msg, { selected, onSelect, mailboxId }) {
+  const identity = identityLine(msg);
   const row = el(
     'div',
     {
@@ -35,7 +88,7 @@ function messageRow(msg, { selected, onSelect, mailboxId }) {
       // handler below; using a real <a> instead would fight the row's
       // interactive children (star, checkbox).
       tabindex: '0',
-      'aria-label': `${msg.isRead ? '' : 'Unread. '}${displayName(msg.from)}. ${msg.subject || '(no subject)'}`,
+      'aria-label': `${msg.isRead ? '' : 'Unread. '}${identity}. ${msg.subject || '(no subject)'}`,
       onClick: (event) => {
         // Clicking the star or checkbox shouldn't open the message.
         if (event.target.closest('.msg-star, .msg-check')) return;
@@ -65,14 +118,17 @@ function messageRow(msg, { selected, onSelect, mailboxId }) {
       'aria-label': 'Select message',
       onChange: (event) => onSelect(msg.id, event.target.checked),
     }),
-    el('div', { class: 'msg-avatar', text: initials(msg.direction === 'outbound' ? msg.to?.[0] : msg.from) }),
+    el('div', { class: 'msg-avatar', text: initials(msg.direction === 'outbound' ? (msg.to?.[0] || msg.cc?.[0]) : msg.from) }),
     el(
       'div',
       { class: 'msg-main' },
       el(
         'div',
         { class: 'msg-line' },
-        el('span', { class: 'msg-from', text: displayName(msg.direction === 'outbound' ? { name: 'To', email: msg.to?.join(', ') } : msg.from) }),
+        // The row is focusable and the line is the first thing truncated, so the
+        // full recipient list is kept here for anyone who hovers it; the
+        // aria-label above carries it for anyone who cannot.
+        el('span', { class: 'msg-from', text: identity, title: identity }),
         el('span', { class: 'msg-date', text: relTime(msg.sentAt || msg.receivedAt || msg.createdAt) }),
       ),
       el('div', { class: 'msg-subject', text: msg.subject || '(no subject)' }),
@@ -80,9 +136,7 @@ function messageRow(msg, { selected, onSelect, mailboxId }) {
     ),
     el('div', { class: 'msg-tags' },
       msg.hasAttachments ? el('span', { class: 'tag', title: 'Has attachments' }, icon('paperclip', { size: 14 })) : null,
-      msg.deliveryStatus && msg.deliveryStatus !== 'delivered' && msg.deliveryStatus !== 'sent'
-        ? el('span', { class: 'tag', text: msg.deliveryStatus })
-        : null,
+      deliveryTag(msg),
     ),
     el('button', {
       class: `msg-star${msg.isStarred ? ' on' : ''}`,
