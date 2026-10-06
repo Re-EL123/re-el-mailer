@@ -339,6 +339,9 @@ export default createHandler({
           const participants = [
             ...body.to.map((email) => ({ email })),
             ...body.cc.map((email) => ({ email })),
+            // Bcc joins them: it is still someone this mailbox chose to email,
+            // and suggestions never leave this mailbox.
+            ...body.bcc.map((email) => ({ email })),
           ].filter((entry) => entry.email);
           if (participants.length) {
             await rememberContacts(mailbox.id, participants).catch(() => {});

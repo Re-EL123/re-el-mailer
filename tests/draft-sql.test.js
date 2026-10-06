@@ -47,6 +47,7 @@ vi.mock('../packages/db/mailboxes.js', () => ({
   findMailboxById: vi.fn(async () => ({ id: 'mbx_1', email: 'info@re-el.co.za', status: 'active' })),
   listMailboxesForUser: vi.fn(async () => []),
   countMailboxStorage: vi.fn(async () => ({ used: 0 })),
+  rememberContacts: vi.fn(async () => {}),
 }));
 
 vi.mock('../packages/auth/guard.js', () => ({

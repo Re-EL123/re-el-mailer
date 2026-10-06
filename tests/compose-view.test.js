@@ -30,6 +30,7 @@ vi.mock('../apps/web/js/api.js', () => ({
     send: {
       reply: vi.fn(async () => ({ draft: { to: [], cc: [], bcc: [], subject: 'Re: x' } })),
       forward: vi.fn(async () => ({ draft: { to: [], cc: [], bcc: [], subject: 'Fwd: x' } })),
+      suggest: vi.fn(async () => ({ suggestions: [] })),
       send: vi.fn(async () => ({ message: { id: 'msg_1' } })),
     },
   },
@@ -124,6 +125,7 @@ beforeEach(() => {
   api.send.send.mockClear();
   api.mail.saveDraft.mockClear();
   api.mail.get.mockClear();
+  api.send.suggest.mockClear();
 });
 
 describe('the plain-text fallback', () => {
@@ -271,6 +273,111 @@ describe('reply-all', () => {
 
     expect(api.send.reply).toHaveBeenCalledWith('msg_1', 'sender', MB);
     expect(container.querySelector('.compose-title').textContent).toBe('Reply');
+  });
+});
+
+describe('recipient suggestions', () => {
+  const suggestions = [
+    { email: 'alice@example.com', name: 'Alice Akpan' },
+    { email: 'bob@example.com', name: 'Bob Nkosi' },
+  ];
+
+  const makeField = async () => {
+    const container = host();
+    await renderCompose(container, { query: { mailbox: MB } });
+    return {
+      container,
+      input: container.querySelector('input[name="to"]'),
+    };
+  };
+
+  const type = (input, value) => {
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  const waitForSug = (input) => waitFor('.recipient-suggest:not([hidden])', input.parentElement);
+
+  it('asks the server for matches as the user types the active token', async () => {
+    api.send.suggest.mockResolvedValueOnce({ suggestions });
+    const { input } = await makeField();
+
+    type(input, 'bob@example.com, ali');
+
+    const list = await waitForSug(input);
+    expect(api.send.suggest).toHaveBeenCalledWith('ali', MB);
+    expect(list.querySelectorAll('.recipient-option')).toHaveLength(2);
+    expect(list.textContent).toContain('Alice Akpan <alice@example.com>');
+  });
+
+  it('shows recent contacts when the field is focused empty', async () => {
+    api.send.suggest.mockResolvedValueOnce({ suggestions });
+    const { input } = await makeField();
+
+    input.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+
+    await waitForSug(input);
+    expect(api.send.suggest).toHaveBeenCalledWith('', MB);
+  });
+
+  it('replaces only the active token when an option is chosen with the keyboard', async () => {
+    api.send.suggest.mockResolvedValueOnce({ suggestions });
+    const { input } = await makeField();
+
+    type(input, 'bob@example.com, ali');
+    await waitForSug(input);
+
+    const move = (key) => input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    move('ArrowDown'); // first option becomes active
+    move('Enter');
+
+    expect(input.value).toBe('bob@example.com, alice@example.com, ');
+    expect(api.send.suggest).toHaveBeenCalledWith('ali', MB);
+  });
+
+  it('inserts the address from a mouse click and keeps the field focused', async () => {
+    api.send.suggest.mockResolvedValueOnce({ suggestions });
+    const { input } = await makeField();
+
+    type(input, 'ali');
+    const list = await waitForSug(input);
+
+    list.querySelector('.recipient-option').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    expect(input.value).toBe('alice@example.com, ');
+  });
+
+  it('closes the list on Escape and stops announcing it', async () => {
+    api.send.suggest.mockResolvedValueOnce({ suggestions });
+    const { input } = await makeField();
+
+    type(input, 'ali');
+    await waitForSug(input);
+    expect(input.getAttribute('aria-expanded')).toBe('true');
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(input.getAttribute('aria-expanded')).toBe('false');
+    expect(input.parentElement.querySelector('.recipient-suggest').hidden).toBe(true);
+  });
+
+  it('never disables the composer when the suggestions endpoint fails', async () => {
+    api.send.suggest.mockRejectedValueOnce(new Error('suggestions down'));
+    const { container, input } = await makeField();
+
+    type(input, 'ali');
+    // Let the debounce and the failed request settle; the field must carry on.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(input.parentElement.querySelector('.recipient-suggest').hidden).toBe(true);
+    expect(input.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('form')).toBeTruthy();
+  });
+
+  it('does not query again after the list is cleared', async () => {
+    api.send.suggest.mockResolvedValue({ suggestions });
+    const { input } = await makeField();
+
+    type(input, '');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(api.send.suggest).not.toHaveBeenCalled();
   });
 });
 

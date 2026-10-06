@@ -78,6 +78,15 @@ export async function renderCompose(container, ctx) {
 
   const form = el('form', { class: 'compose-form', novalidate: true });
 
+  /**
+   * A recipient field with inline suggestions.
+   *
+   * The field holds a comma/newline list; the active token is the text after the
+   * last separator. Suggestions come from the `suggest` endpoint, which merges
+   * stored contacts with the frequent inbound senders, for the token being
+   * typed. Selecting one replaces that token, keeps the addresses already in the
+   * field, and leaves the caret ready for the next recipient.
+   */
   function recipientsField(label, name, parent, { single = false } = {}) {
     const input = el('input', {
       type: 'text',
@@ -89,8 +98,148 @@ export async function renderCompose(container, ctx) {
       autocomplete: 'off',
       autocapitalize: 'off',
       spellcheck: 'false',
+      // Combobox pattern: the input names the popup it controls, so a screen
+      // reader hears the list open and which option is active, not a bare text
+      // field the suggestions appear "beside".
+      role: 'combobox',
+      'aria-autocomplete': 'list',
+      'aria-controls': `${name}-suggest`,
+      'aria-expanded': 'false',
     });
-    parent.append(el('label', { class: 'field' }, el('span', { class: 'field-label', text: label }), input));
+
+    const list = el('div', { class: 'recipient-suggest', role: 'listbox', id: `${name}-suggest` });
+    list.hidden = true;
+
+    const wrapper = el('div', { class: 'recipient-field' });
+    wrapper.append(input, list);
+    parent.append(el('label', { class: 'field' }, el('span', { class: 'field-label', text: label }), wrapper));
+
+    let suggestions = [];
+    let active = -1;
+    let suggestTimer = null;
+
+    /** Index just past the last separator: where the token the user is typing starts. */
+    function tokenStart() {
+      const value = input.value;
+      const cut = Math.max(value.lastIndexOf(','), value.lastIndexOf('\n'));
+      return cut === -1 ? 0 : cut + 1;
+    }
+
+    function tokenText() {
+      return input.value.slice(tokenStart()).trim();
+    }
+
+    function close() {
+      suggestions = [];
+      active = -1;
+      list.hidden = true;
+      // Cancel a pending request so a field that was focused then blurred (or
+      // had an address picked) never pops the list back open behind the user.
+      clearTimeout(suggestTimer);
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+    }
+
+    function select(index) {
+      const choice = suggestions[index];
+      if (!choice) return;
+      const value = input.value;
+      // Cut before the last separator, so the chosen address replaces that
+      // token and the separator is written fresh after it.
+      const cut = Math.max(value.lastIndexOf(','), value.lastIndexOf('\n'));
+      const kept = cut === -1 ? '' : value.slice(0, cut).trimEnd();
+      input.value = `${kept}${kept ? ', ' : ''}${choice.email}, `;
+      input.setSelectionRange(input.value.length, input.value.length);
+      // The field is already focused — the list only opens in response to the
+      // focus/typing it is watching — so refocusing and its focus handler
+      // would reopen the recents the moment an address was picked.
+      close();
+    }
+
+    function render() {
+      mount(
+        list,
+        ...suggestions.map((entry, index) =>
+          el('div', {
+            id: `${list.id}-${index}`,
+            role: 'option',
+            'aria-selected': String(index === active),
+            class: `recipient-option${index === active ? ' active' : ''}`,
+            text: entry.name && entry.name !== entry.email ? `${entry.name} <${entry.email}>` : entry.email,
+            // mousedown, not click: click on a blurred input is preceded by blur,
+            // which closes the list before the selection lands. preventingDefault
+            // keeps focus here so the address is picked and the caret stays in.
+            onMousedown: (event) => {
+              event.preventDefault();
+              select(index);
+            },
+          }),
+        ),
+      );
+      const open = suggestions.length > 0;
+      list.hidden = !open;
+      input.setAttribute('aria-expanded', String(open));
+      if (open && active >= 0) input.setAttribute('aria-activedescendant', `${list.id}-${active}`);
+      else input.removeAttribute('aria-activedescendant');
+    }
+
+    async function request(query) {
+      try {
+        const data = await api.send.suggest(query, mailboxId);
+        suggestions = (data && data.suggestions) || [];
+      } catch {
+        // An unreachable suggestions endpoint must not take the composer down
+        // with it: recipients are still typed and sent as before.
+        suggestions = [];
+      }
+      render();
+    }
+
+    const scheduleSuggest = (query) => {
+      clearTimeout(suggestTimer);
+      suggestTimer = setTimeout(() => request(query), 160);
+    };
+
+    input.addEventListener('focus', () => {
+      active = -1;
+      scheduleSuggest(tokenText());
+    });
+    input.addEventListener('input', () => {
+      active = -1;
+      const query = tokenText();
+      if (!query) {
+        close();
+        return;
+      }
+      scheduleSuggest(query);
+    });
+    input.addEventListener('blur', () => close());
+    input.addEventListener('keydown', (event) => {
+      if (list.hidden) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        active = (active + 1) % suggestions.length;
+        render();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        active = (active - 1 + suggestions.length) % suggestions.length;
+        render();
+      } else if (event.key === 'Enter') {
+        if (active >= 0) {
+          event.preventDefault();
+          select(active);
+        }
+      } else if (event.key === 'Tab') {
+        // Select first, then let the default tab behaviour move on: after a
+        // completion the caret has no next token to type.
+        if (active >= 0) select(active);
+        close();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+    });
+
     return input;
   }
 

@@ -534,6 +534,17 @@ const handlerSpec = {
         const html = body.html ?? '';
         const text = body.text ?? (html ? htmlToText(html) : '');
 
+        // Learn every address typed into the composer, before send: a draft can
+        // sit for weeks, and the suggest endpoint reads this same table. Bcc is
+        // included — it is someone this mailbox chose to write to, and
+        // suggestions are only ever shown back to the owner of that mailbox.
+        const participants = [...(body.to || []), ...(body.cc || []), ...(body.bcc || [])]
+          .filter((email) => email)
+          .map((email) => ({ email }));
+        if (participants.length) {
+          await rememberContacts(mailbox.id, participants).catch(() => {});
+        }
+
         if (body.id) {
           const existing = await findOwned(body.id, mailbox.id);
           if (!existing) throw new AppError(Codes.NOT_FOUND, 'Draft not found.');

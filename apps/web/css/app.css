@@ -395,6 +395,21 @@ textarea { resize: vertical; }
 .compose-title { margin: 0 0 14px; font-size: 20px; }
 .compose { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; max-width: 900px; }
 .compose-body { min-height: 260px; font-family: inherit; }
+
+/* Recipient suggestions: a popup under the field, within the scrollable form.
+   The options panel never blocks interaction with the toolbar behind it, so the
+   composer form does not hide overflow; the list itself clips and scrolls. */
+.recipient-field { position: relative; width: 100%; }
+.recipient-suggest {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); max-height: 240px; overflow-y: auto;
+}
+.recipient-option {
+  padding: 8px 12px; cursor: pointer; font-size: 14px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.recipient-option.active, .recipient-option[aria-selected='true'] { background: var(--brand-050); }
 .attach-input { display: none; }
 .attach-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .compose-attachments { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
