@@ -125,4 +125,48 @@ describe('list actions', () => {
     expect(call).toBeTruthy();
     expect(JSON.parse(call[1].body).ids).toEqual(['msg_1']);
   });
+
+  it('Starred view offers Unstar, not Star', async () => {
+    const container = await render([message({ isStarred: true })], 'starred');
+    const box = await waitFor('.msg-check', container);
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    const buttons = [...container.querySelectorAll('.list-actions button')].map((b) => b.textContent);
+    expect(buttons).toContain('Unstar');
+    expect(buttons).not.toContain('Star');
+
+    const unstar = [...container.querySelectorAll('.list-actions button')].find((b) => b.textContent === 'Unstar');
+    unstar.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const call = fetchStub.mock.calls.find(([url]) => String(url).includes('action=star'));
+    expect(call).toBeTruthy();
+    expect(JSON.parse(call[1].body)).toEqual({ ids: ['msg_1'], isStarred: false });
+  });
+
+  it('Archive view offers Unarchive and moves back to inbox', async () => {
+    const container = await render([message({ folder: 'archive' })], 'archive');
+    const box = await waitFor('.msg-check', container);
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    const buttons = [...container.querySelectorAll('.list-actions button')].map((b) => b.textContent);
+    expect(buttons).toContain('Unarchive');
+    expect(buttons).not.toContain('Archive');
+
+    const unarchive = [...container.querySelectorAll('.list-actions button')].find((b) => b.textContent === 'Unarchive');
+    unarchive.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const call = fetchStub.mock.calls.find(([url]) => String(url).includes('action=move'));
+    expect(call).toBeTruthy();
+    expect(JSON.parse(call[1].body)).toEqual({ ids: ['msg_1'], folder: 'inbox' });
+  });
+
+  it('other folders keep Star and Archive labels', async () => {
+    const container = await render([message()], 'sent');
+    const box = await waitFor('.msg-check', container);
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    const buttons = [...container.querySelectorAll('.list-actions button')].map((b) => b.textContent);
+    expect(buttons).toContain('Star');
+    expect(buttons).toContain('Archive');
+  });
 });

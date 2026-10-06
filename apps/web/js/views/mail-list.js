@@ -226,6 +226,17 @@ export async function renderMailList(container, ctx) {
   const labelId = ctx.query.label || null;
   const mailboxId = ctx.query.mailbox || state.activeMailboxId;
 
+  // In Starred the action is "unstar", in Archive it is "unarchive": selecting
+  // something there and facing the same operation that put it in the view
+  // suggests the item can only move deeper, not back out. The reader already
+  // toggles per-row star_state; the bulk bar must match it.
+  const inStarred = folder === 'starred';
+  const inArchive = folder === 'archive';
+  const starLabel = inStarred ? 'Unstar' : 'Star';
+  const archiveLabel = inArchive ? 'Unarchive' : 'Archive';
+  const starAction = (ids) => api.mail.star(ids, !inStarred, mailboxId);
+  const archiveAction = (ids) => api.mail.move(ids, inArchive ? 'inbox' : 'archive', mailboxId);
+
   if (state.mailboxes.length > 1) saveMailbox(mailboxId);
 
   const selected = new Set();
@@ -318,8 +329,8 @@ export async function renderMailList(container, ctx) {
   mount(
     actionsNode,
     actionsCount,
-    bulkButton('Star', () => api.mail.star([...selected], true, mailboxId)),
-    bulkButton('Archive', () => api.mail.move([...selected], 'archive', mailboxId)),
+    bulkButton(starLabel, () => starAction([...selected])),
+    bulkButton(archiveLabel, () => archiveAction([...selected])),
     bulkButton('Trash', () => api.mail.trash([...selected], mailboxId)),
     folder === 'trash' || folder === 'spam'
       ? bulkButton('Delete forever', () => api.mail.deleteForever([...selected], mailboxId), true)
@@ -377,8 +388,8 @@ export async function renderMailList(container, ctx) {
       box.checked = !box.checked;
       box.dispatchEvent(new Event('change', { bubbles: true }));
     },
-    s: () => actOnTargets((ids) => api.mail.star(ids, true, mailboxId)),
-    e: () => actOnTargets((ids) => api.mail.move(ids, 'archive', mailboxId)),
+    s: () => actOnTargets(starAction),
+    e: () => actOnTargets(archiveAction),
     hash: () => actOnTargets((ids) => api.mail.trash(ids, mailboxId)),
     // `u` unreads on a folder list but is "go back" in a reading pane; the reader
     // registers its own binding, which takes priority over this one.
