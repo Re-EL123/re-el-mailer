@@ -613,6 +613,7 @@ export async function renderCompose(container, ctx) {
       filename: file.name,
       mimeType,
       size: file.size,
+      mailboxId,
     });
 
     const response = await fetch(ticket.url, {
@@ -631,6 +632,7 @@ export async function renderCompose(container, ctx) {
       attachmentId: ticket.attachmentId,
       filename: file.name,
       mimeType,
+      mailboxId,
     });
     return done.attachment;
   }
