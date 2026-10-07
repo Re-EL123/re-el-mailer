@@ -183,3 +183,81 @@ describe('parseAddressList', () => {
     expect(result.join(' ')).not.toContain('Bcc:');
   });
 });
+
+describe('sanitizeHtml style blocks', () => {
+  it('keeps a safe <style> sheet, which emails depend on for text colour', () => {
+    const result = sanitizeHtml('<p class="body">hi</p><style>.body { color: #333; }</style>');
+    expect(result).toContain('<style>.body { color: #333; }</style>');
+    expect(result).toContain('hi');
+  });
+
+  it('keeps the sheet when it lives inside <head>', () => {
+    const result = sanitizeHtml('<html><head><style>td { padding: 4px; }</style></head><body><p>x</p></body></html>');
+    expect(result).toContain('<style>td { padding: 4px; }</style>');
+    // The tag elements themselves are still dropped, only their content style
+    // survives, so no <head>/<body> wrappers leak through.
+    expect(result).not.toMatch(/<head>|<body>/i);
+  });
+
+  it('still drops <script> around a kept style block', () => {
+    const result = sanitizeHtml('<style>p { color: red }</style><script>alert(1)</script>');
+    expect(result).toContain('<style>p { color: red }</style>');
+    expect(result).not.toContain('script');
+  });
+
+  it('removes comments and @import from the sheet', () => {
+    const result = sanitizeHtml('<style>/* note */ @import url("https://evil.example/x.css"); p { color: red }</style>');
+    expect(result).not.toContain('@import');
+    expect(result).not.toContain('/*');
+    expect(result).not.toContain('evil.example');
+    expect(result).toContain('p { color: red }');
+  });
+
+  it('drops the sheet entirely if it needs expression() or behaviour bindings', () => {
+    const expression = sanitizeHtml('<style>a { width: expression(alert(1)) }</style>');
+    expect(expression).not.toContain('<style');
+
+    const binding = sanitizeHtml('<style>a { -moz-binding: url(#x) }</style>');
+    expect(binding).not.toContain('<style');
+  });
+
+  it('neutralises a javascript: url() inside the sheet', () => {
+    const result = sanitizeHtml('<style>a { background: url(javascript:alert(1)) }</style>');
+    // The url is replaced with the inert keyword `none`; no live scheme remains
+    // anywhere in the output (the sheet itself is kept, as it is now inert).
+    expect(result).not.toContain('javascript:');
+    expect(result).toContain('<style>a { background: none) }</style>');
+  });
+
+  it('cuts the sheet at a smuggled close tag so nothing after it leaks as markup', () => {
+    const result = sanitizeHtml('<style>p::before { content: "</style><script>alert(1)</script>" }</style>');
+    // Text inside <style> ends at the first </style>, as in a browser; what
+    // follows that boundary is parsed normally and the <script> is dropped with
+    // its contents, so nothing from the attacker's tail survives as markup.
+    expect(result).not.toContain('<script');
+    expect(result).toBe('<style>p::before { content: "</style>');
+  });
+
+  it('keeps remote image urls but nulls anything that is not http(s)/data:image', () => {
+    const result = sanitizeHtml('<style>a { background: url("https://cdn.example/bg.png") top; border: 1px solid red }</style>');
+    expect(result).toContain('url("https://cdn.example/bg.png")');
+    expect(result).toContain('border: 1px solid red');
+  });
+
+  it('never leaks the sheet into the plain-text view', () => {
+    const result = sanitizeHtml('<p>Hello</p><style>.body { color: red }</style>');
+    expect(htmlToText(result)).not.toContain('.body');
+    expect(htmlToText(result)).toContain('Hello');
+  });
+
+  it('keeps legitimate @media colour swaps for dark mode', () => {
+    const result = sanitizeHtml('<style>@media (prefers-color-scheme: dark) { body { background: #000; } }</style>');
+    expect(result).toContain('@media (prefers-color-scheme: dark)');
+  });
+
+  it('never leaks the sheet into the plain-text view', () => {
+    const result = sanitizeHtml('<p>Hello</p><style>.body { color: red }</style>');
+    expect(htmlToText(result)).not.toContain('.body');
+    expect(htmlToText(result)).toContain('Hello');
+  });
+});

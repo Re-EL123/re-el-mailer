@@ -31,14 +31,22 @@ const ALLOWED_TAGS = new Set([
 
 /**
  * Elements dropped *with their contents* — their text is not safe or useful
- * to keep (script/style text is code; svg/math can carry script; form controls
- * can phish; head/meta can rewrite the document).
+ * to keep (script text is code; form controls can phish; head/meta can rewrite
+ * the document).
+ *
+ * `<head>` and `<style>` are *not* in this set: their tag elements are dropped
+ * (neither is in the allowlist) but a style sheet's CSS is kept through
+ * `sanitizeCssSheet()`, because emails carry their text colours and layout in
+ * a `<style>` block. Dropping it made every HTML email render with the app's
+ * fallback colour over the sender's own background — "styled squares with no
+ * text". Keeping only sanitised CSS preserves both without letting the block
+ * execute.
  */
 const DROP_WITH_CONTENT = new Set([
-  'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet',
+  'script', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet',
   'noscript', 'template', 'svg', 'math', 'form', 'input', 'button', 'select',
   'option', 'optgroup', 'textarea', 'fieldset', 'legend', 'link', 'meta', 'base',
-  'head', 'title', 'audio', 'video', 'source', 'track', 'canvas', 'map', 'area',
+  'title', 'audio', 'video', 'source', 'track', 'canvas', 'map', 'area',
   'dialog', 'portal', 'slot', 'plaintext', 'xmp', 'listing', 'marquee',
 ]);
 
@@ -191,6 +199,39 @@ export function sanitizeStyle(value) {
   return css.slice(0, 2_000);
 }
 
+/**
+ * Sanitise a whole `<style>` block, so an email keeps the sheet that paints
+ * its text and layout without importing anything or running script.
+ *
+ * Rules that cannot be made safe are removed rather than refusing the entire
+ * sheet: real emails put `@import` for their base fonts at the top and
+ * `@media (prefers-color-scheme: dark)` colour swaps at the bottom, and both
+ * carry no risk once the url()-bearing parts are checked.
+ */
+export function sanitizeCssSheet(value) {
+  let css = stripControlChars(String(value ?? ''));
+  // A stray close tag inside a string or url() would end the block early and
+  // leak whatever follows into the document. Escaping the slash is a legal CSS
+  // escape that cannot close the element.
+  css = css.replace(/<\/style/gi, '<\\/style');
+  css = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  css = css.replace(/@import\b[^;]*;?/gi, '');
+
+  // A sheet that still resolves imports, behaviour bindings or expressions is
+  // refused outright; none of those belong in email CSS.
+  if (/expression\s*\(|-moz-binding|behaviou?r\s*:|@import/i.test(css)) return '';
+
+  css = css.replace(/url\(\s*(['"]?)([^)'"]*)\1\s*\)/gi, (match, _quote, url) => {
+    const decoded = decodeEntities(url).trim();
+    if (!decoded) return '';
+    if (/^data:image\//i.test(decoded)) return match;
+    if (/^https?:\/\//i.test(decoded)) return match;
+    return 'none';
+  });
+  if (/javascript:|vbscript:|data:text\/html/i.test(css)) return '';
+  return css.slice(0, 100_000);
+}
+
 // ─── Tokeniser ───────────────────────────────────────────────────────────────
 
 /**
@@ -340,6 +381,20 @@ export function sanitizeHtml(html, options = {}) {
 
     const tagName = nameMatch[1].toLowerCase();
     if (tagName === 'font') continue; // deprecated, styling comes from class/style
+
+    // `<style>` is kept, but only as sanitised CSS: tag, content and closure
+    // are re-emitted from the sheet alone, so nothing can smuggle markup out.
+    if (tagName === 'style' && !selfClosing) {
+      const end = skipElement(input, 'style', index);
+      const css = sanitizeCssSheet(input.slice(index, end).replace(/<\/style\s*>$/i, ''));
+      if (css) {
+        emit('<style>');
+        emit(css);
+        emit('</style>');
+      }
+      index = end;
+      continue;
+    }
 
     if (DROP_WITH_CONTENT.has(tagName)) {
       // Suppress output until the matching close tag (or to end of input).

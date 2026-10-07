@@ -19,7 +19,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BODY_SANDBOX, activeTheme, mountMessageFrame } from '../apps/web/js/body-frame.js';
+import { BODY_SANDBOX, mountMessageFrame } from '../apps/web/js/body-frame.js';
 
 /** A host to mount into, cleared between tests. */
 let host;
@@ -98,45 +98,42 @@ describe('mountMessageFrame', () => {
   });
 });
 
-describe('theme', () => {
-  it('reads the app theme, not the operating system colour scheme', () => {
+describe('canvas', () => {
+  it('renders email content on a light canvas, independent of the app theme', () => {
     document.documentElement.dataset.theme = 'dark';
     const { frame } = mountMessageFrame('<p>Hello</p>', host);
 
-    expect(activeTheme()).toBe('dark');
-    // The old frame used this media query, which follows the OS. A light OS
-    // with the app in dark mode left dark text on a dark page.
-    expect(frame.srcdoc).not.toMatch(/prefers-color-scheme/);
-    expect(frame.srcdoc).toContain('#e8ebf2');
-  });
-
-  it('renders light colours when the app is light', () => {
-    document.documentElement.dataset.theme = 'light';
-    const { frame } = mountMessageFrame('<p>Hello</p>', host);
-
+    // Email content is authored for a light canvas; the app theme must not leak
+    // a pale text colour onto the sender's own backgrounds.
+    expect(frame.srcdoc).toContain('background: #ffffff');
     expect(frame.srcdoc).toContain('#1b2233');
     expect(frame.srcdoc).not.toContain('#e8ebf2');
   });
 
-  it('re-renders when the theme changes while the message is open', async () => {
+  it('uses the same canvas when the app is light', () => {
+    document.documentElement.dataset.theme = 'light';
     const { frame } = mountMessageFrame('<p>Hello</p>', host);
+
+    expect(frame.srcdoc).toContain('background: #ffffff');
     expect(frame.srcdoc).toContain('#1b2233');
-
-    document.documentElement.dataset.theme = 'dark';
-    await settle();
-
-    expect(frame.srcdoc).toContain('#e8ebf2');
+    expect(frame.srcdoc).not.toContain('#e8ebf2');
   });
 
-  it('stops following the theme once destroyed', async () => {
-    const { frame, destroy } = mountMessageFrame('<p>Hello</p>', host);
-    destroy();
+  it('does not expose the operating system colour scheme to the content', () => {
+    const { frame } = mountMessageFrame('<p>Hello</p>', host);
+
+    expect(frame.srcdoc).not.toMatch(/prefers-color-scheme/);
+  });
+
+  it('keeps the canvas stable when the app theme changes while open', async () => {
+    const { frame } = mountMessageFrame('<p>Hello</p>', host);
+    expect(frame.srcdoc).toContain('background: #ffffff');
 
     document.documentElement.dataset.theme = 'dark';
     await settle();
 
-    // Still light: the observer was disconnected.
-    expect(frame.srcdoc).toContain('#1b2233');
+    expect(frame.srcdoc).toContain('background: #ffffff');
+    expect(frame.srcdoc).not.toContain('#e8ebf2');
   });
 });
 

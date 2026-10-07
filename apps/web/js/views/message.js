@@ -157,9 +157,9 @@ export async function renderMessage(container, ctx) {
 
       // Render body: sanitised HTML in a sandboxed frame, else plain text.
       if (msg.bodyHtml) {
-        // `mountMessageFrame` owns the sandbox tokens, the theme and the
-        // sizing; the reader just places it. The comment that used to live
-        // here — claiming the frame sizes itself from its content — was the
+        // `mountMessageFrame` owns the sandbox tokens, the light content canvas
+        // and the sizing; the reader just places it. The comment that used to
+        // live here — claiming the frame sizes itself from its content — was the
         // bug: without allow-same-origin this page cannot read into it, so
         // nothing could size it, and every body sat in a 150px strip.
         bodyFrame = mountMessageFrame(msg.bodyHtml, body);

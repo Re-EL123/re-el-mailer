@@ -23,10 +23,11 @@
  *    images have settled. Both happen in the same hidden host, so the frame's
  *    own requests usually hit the warm cache rather than going out twice.
  *
- * 2. Theme. The frame follows the app's `[data-theme]`, not the operating
- *    system's `prefers-color-scheme`. They are independent — a light-mode OS
- *    with the app in dark mode left dark text on a transparent background over
- *    a dark page, which was unreadable.
+ * 2. Canvas. Email content gets a light canvas in its own authored colours,
+ *    the way mail clients render it. Letting the app's theme text colour bleed
+ *    into the frame is what made styled boxes with invisible text: senders
+ *    paint backgrounds but leave text colour to their `<style>` sheet, and
+ *    whichever app theme was active clashed with the sender's background.
  */
 
 import { el } from './ui.js';
@@ -57,27 +58,28 @@ const IMAGE_WAIT_MS = 2500;
 
 const FONT = "font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif";
 
-/** Colours are read from the app's own tokens, not the OS colour scheme. */
-const THEMES = {
-  light: { text: '#1b2233', link: '#21396a', quote: '#4a5468', rule: '#d7deec' },
-  dark: { text: '#e8ebf2', link: '#8fb0ff', quote: '#9aa3b7', rule: '#2a3348' },
+/**
+ * Email content is rendered on a light canvas in its authored colours, the way
+ * mail clients render it (and the way senders design for it). Forcing the
+ * app's theme text colour onto the content was the hop too far: an email that
+ * sets its own backgrounds but never its text colour (common — the colour is
+ * in its `<style>` sheet) ended up with light text on its white cells in the
+ * dark theme, or dark text on its dark hero blocks in the light one: styled
+ * boxes with invisible text.
+ */
+const CANVAS = {
+  background: '#ffffff',
+  text: '#1b2233',
+  link: '#1a5fb4',
+  quote: '#4a5468',
+  rule: '#d7deec',
 };
 
-/** The active theme name, taken from the document the app is currently drawing. */
-export function activeTheme() {
-  return document.documentElement?.dataset?.theme === 'dark' ? 'dark' : 'light';
-}
-
-/**
- * The stylesheet inside the frame.
- *
- * Shared with the measuring host so both lay the same content out the same way:
- * if they disagreed, every measured height would be wrong by the difference.
- */
-function frameStyles(theme) {
-  const c = THEMES[theme];
+/** The stylesheet inside the frame. */
+function frameStyles() {
+  const c = CANVAS;
   return `
-    html, body { margin: 0; padding: 0; background: transparent; color: ${c.text}; overflow-wrap: anywhere; }
+    html, body { margin: 0; padding: 0; background: ${c.background}; color: ${c.text}; overflow-wrap: anywhere; }
     body { ${FONT}; padding: 4px 2px; }
     img { max-width: 100%; height: auto; }
     table { max-width: 100%; border-collapse: collapse; }
@@ -90,12 +92,12 @@ function frameStyles(theme) {
 }
 
 /** The frame document. */
-function srcdoc(html, theme) {
+function srcdoc(html) {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <base target="_blank"><meta name="referrer" content="no-referrer">
-<style>${frameStyles(theme)}</style>
+<style>${frameStyles()}</style>
 </head><body>${html}</body></html>`;
 }
 
@@ -132,7 +134,7 @@ function neutralise(root) {
  * `visibility: hidden` rather than `display: none`: hidden boxes still lay out
  * and still load their images, which is the entire point of the host.
  */
-function createMeasurer(html, width, theme) {
+function createMeasurer(html, width) {
   const host = document.createElement('div');
   host.setAttribute('aria-hidden', 'true');
   host.setAttribute('data-message-measurer', '');
@@ -164,7 +166,7 @@ function createMeasurer(html, width, theme) {
    */
   const shadow = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
   const own = document.createElement('style');
-  own.textContent = frameStyles(theme);
+  own.textContent = frameStyles();
 
   const body = document.createElement('body');
   shadow.append(own, body);
@@ -172,8 +174,10 @@ function createMeasurer(html, width, theme) {
   // An email's own stylesheet is normally in the <head>, and dropping it would
   // make the measurement meaningless — a table sized by CSS would come out at a
   // different height than the frame actually renders it. Kept inside the shadow
-  // root so it is scoped to this one tree and cannot reach the app.
-  for (const sheet of [...parsed.head.querySelectorAll('style')]) {
+  // root so it is scoped to this one tree and cannot reach the app. Styles at
+  // body level (where the sanitizer re-emits them) are copied the same way, in
+  // document order, so the frame and the measurer agree.
+  for (const sheet of [...parsed.querySelectorAll('style')]) {
     body.append(sheet);
   }
   while (parsed.body.firstChild) body.append(parsed.body.firstChild);
@@ -247,7 +251,6 @@ export function mountMessageFrame(html, host) {
   host.append(wrapper);
 
   let destroyed = false;
-  let theme = activeTheme();
 
   /** Read the current width of the frame's box, which is the wrapper's. */
   const frameWidth = () => wrapper.clientWidth || frame.clientWidth || 0;
@@ -268,7 +271,7 @@ export function mountMessageFrame(html, host) {
   async function applyHeight({ withImages = false } = {}) {
     if (destroyed) return;
 
-    const { host: box, body: measured } = createMeasurer(html, frameWidth(), theme);
+    const { host: box, body: measured } = createMeasurer(html, frameWidth());
 
     // Text is laid out already, so this reading is final for text-only bodies
     // and merely a good first estimate for the rest. It is written straight
@@ -290,16 +293,9 @@ export function mountMessageFrame(html, host) {
     setHeight(height);
   }
 
-  /** Re-apply theme and size from scratch — used when the theme changes. */
-  function restyle(nextTheme) {
-    theme = nextTheme;
-    frame.srcdoc = srcdoc(html, theme);
-    applyHeight({ withImages: true });
-  }
-
   // First paint: text already has a height, images do not, so measure now and
   // again once they are in.
-  frame.srcdoc = srcdoc(html, theme);
+  frame.srcdoc = srcdoc(html);
   applyHeight({ withImages: true });
 
   // Re-measure when the frame's box changes. Emails are mostly fixed-width
@@ -308,22 +304,12 @@ export function mountMessageFrame(html, host) {
   const onResize = () => applyHeight({ withImages: false });
   window.addEventListener('resize', onResize);
 
-  // The frame has to follow the app theme, which lives on <html data-theme> and
-  // changes independently of the OS setting the frame's media query would see.
-  const observer = new MutationObserver((records) => {
-    if (destroyed) return;
-    const next = activeTheme();
-    if (next !== theme) restyle(next);
-  });
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-
   return {
     frame,
     element: wrapper,
     destroy() {
       if (destroyed) return;
       destroyed = true;
-      observer.disconnect();
       window.removeEventListener('resize', onResize);
     },
   };
