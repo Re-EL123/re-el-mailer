@@ -155,19 +155,35 @@ export async function renderMessage(container, ctx) {
       // stays on screen above the message for the life of the view.
       mount(body);
 
-      // Render body: sanitised HTML in a sandboxed frame, else plain text.
-      if (msg.bodyHtml) {
-        // `mountMessageFrame` owns the sandbox tokens, the light content canvas
-        // and the sizing; the reader just places it. The comment that used to
-        // live here — claiming the frame sizes itself from its content — was the
-        // bug: without allow-same-origin this page cannot read into it, so
-        // nothing could size it, and every body sat in a 150px strip.
-        bodyFrame = mountMessageFrame(msg.bodyHtml, body);
-      } else if (msg.bodyText) {
-        body.append(el('pre', { class: 'reader-text', text: msg.bodyText }));
-      } else {
-        body.append(el('p', { class: 'muted', text: 'This message has no body.' }));
-      }
+/**
+ * Length of the "real" text in a sanitised body, ignoring whitespace.
+ *
+ * Damage detection: a body whose text was stripped at ingest still holds its
+ * full element structure (a styled table with empty cells), so an empty text
+ * length is the only way to tell it from a normal body.
+ */
+function visibleTextLength(html) {
+  if (!html) return 0;
+  // bodyHtml is already sanitised, and a <template>'s content is inert, so
+  // this never runs handlers or scripts in the reader's document.
+  const host = document.createElement('template');
+  host.innerHTML = html;
+  return (host.content.textContent || '').replace(/\s/g, '').length;
+}
+
+    // Render body: sanitised HTML in a sandboxed frame, else plain text.
+    if (msg.bodyHtml && (visibleTextLength(msg.bodyHtml) > 0 || !msg.bodyText)) {
+      // `mountMessageFrame` owns the sandbox tokens, the light content canvas
+      // and the sizing; the reader just places it. The comment that used to
+      // live here — claiming the frame sizes itself from its content — was the
+      // bug: without allow-same-origin this page cannot read into it, so
+      // nothing could size it, and every body sat in a 150px strip.
+      bodyFrame = mountMessageFrame(msg.bodyHtml, body);
+    } else if (msg.bodyText) {
+      body.append(el('pre', { class: 'reader-text', text: msg.bodyText }));
+    } else {
+      body.append(el('p', { class: 'muted', text: 'This message has no body.' }));
+    }
 
       if (msg.attachments?.length) {
         body.append(

@@ -25,6 +25,30 @@ describe('sanitizeHtml', () => {
     expect(result).toContain('Hello');
   });
 
+  it('keeps the text that follows a dropped element', () => {
+    // Regression: a dropped element used to stay "open" forever, so every text
+    // run after it was suppressed and emails arrived as styled boxes with no
+    // text at all — the reader's "squares" problem.
+    const cases = [
+      ['script', 'script#1'],
+      ['form', 'form#2'],
+      ['svg', 'svg#3'],
+      ['noscript', 'noscript#4'],
+      ['iframe', 'iframe#5'],
+    ];
+    for (const [tag, marker] of cases) {
+      const result = sanitizeHtml(`<${tag}>junk inside</${tag}><p>After ${marker}</p>`);
+      expect(result).toContain(`After ${marker}`, `${tag} must not swallow later text`);
+      expect(result).not.toContain(`<${tag}`, `${tag}'s open tag must not survive`);
+    }
+  });
+
+  it('still removes the content inside a dropped element itself', () => {
+    const result = sanitizeHtml('<script>alert(1)</script><p>more</p>');
+    expect(result).not.toContain('alert');
+    expect(result).toContain('more');
+  });
+
   it('strips inline event handlers', () => {
     const result = sanitizeHtml('<img src="x" onerror="alert(1)">');
     expect(result).not.toContain('onerror');
@@ -232,10 +256,12 @@ describe('sanitizeHtml style blocks', () => {
   it('cuts the sheet at a smuggled close tag so nothing after it leaks as markup', () => {
     const result = sanitizeHtml('<style>p::before { content: "</style><script>alert(1)</script>" }</style>');
     // Text inside <style> ends at the first </style>, as in a browser; what
-    // follows that boundary is parsed normally and the <script> is dropped with
-    // its contents, so nothing from the attacker's tail survives as markup.
+    // follows that boundary is parsed normally and the <script> is dropped
+    // with its contents, leaving only the attacker's tail as inert escaped
+    // text rather than live markup.
     expect(result).not.toContain('<script');
-    expect(result).toBe('<style>p::before { content: "</style>');
+    expect(result).toContain('<style>p::before { content: "</style>');
+    expect(result).toContain('&quot; }');
   });
 
   it('keeps remote image urls but nulls anything that is not http(s)/data:image', () => {

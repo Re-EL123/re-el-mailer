@@ -116,7 +116,7 @@ describe('message body iframe', () => {
   });
 
   it('loads remote images without any referrer or script capability', async () => {
-    const { frame } = await mountReader('<p><img src="https://tracker.example/pixel.gif"></p>');
+    const { frame } = await mountReader('<p><img src="https://tracker.example/pixel.gif"></p><p>Hi</p>');
 
     // The server sanitiser is what should have stripped this; the frame is the
     // backstop, and the referrer policy is what keeps the request from carrying
@@ -131,6 +131,24 @@ describe('message body iframe', () => {
     // A body that is only ever text should not load a document at all.
     expect(frame).toBeNull();
     expect(container.querySelector('.reader-body').textContent).toContain('fallback');
+  });
+
+  it('falls back to the text body when the HTML body was stripped empty', async () => {
+    // Mail stored by the old sanitiser keeps its full element structure (a
+    // styled table with empty cells) but no text. The reader must not show a
+    // frame full of painted squares; the plain-text body is the readable part.
+    const stripped = '<table><tr><td style="background:#354d91"><strong></strong></td></tr></table><p></p>';
+    const { container, frame } = await mountReader(stripped, { bodyText: 'Someone just submitted your form…' });
+
+    expect(frame).toBeNull();
+    expect(container.querySelector('.reader-body').textContent).toContain('Someone just submitted your form…');
+  });
+
+  it('keeps the frame when the HTML body has its own text', async () => {
+    const { frame } = await mountReader('<p style="background:#354d91;color:white">Welcome</p>');
+
+    expect(frame).not.toBeNull();
+    expect(frame.srcdoc).toContain('Welcome');
   });
 });
 

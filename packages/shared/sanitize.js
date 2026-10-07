@@ -397,11 +397,13 @@ export function sanitizeHtml(html, options = {}) {
     }
 
     if (DROP_WITH_CONTENT.has(tagName)) {
-      // Suppress output until the matching close tag (or to end of input).
+      // Skip the element and everything inside it. `skipElement` consumes the
+      // closing tag itself, so there is nothing later to pop: the old code
+      // pushed these onto `openStack` and raised `droppedDepth`, which meant
+      // the element was never seen as closed and *every* text run after it was
+      // suppressed for the rest of the document — styled squares with no text.
       if (!selfClosing && !VOID_TAGS.has(tagName)) {
         index = skipElement(input, tagName, index);
-        droppedDepth += 1;
-        openStack.push(tagName);
       }
       continue;
     }
