@@ -80,13 +80,19 @@ function frameStyles() {
   const c = CANVAS;
   return `
     html, body { margin: 0; padding: 0; background: ${c.background}; color: ${c.text}; overflow-wrap: anywhere; }
-    body { ${FONT}; padding: 4px 2px; }
+    body { ${FONT}; padding: 16px 20px; max-width: 880px; margin: 0 auto; }
     img { max-width: 100%; height: auto; }
     table { max-width: 100%; border-collapse: collapse; }
     td, th { word-break: break-word; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     a { color: ${c.link}; }
-    blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 3px solid ${c.rule}; color: ${c.quote}; }
+    p { margin: 8px 0; }
+    h1, h2, h3, h4, h5, h6 { margin: 0.8em 0 0.35em; line-height: 1.25; }
+    h1 { font-size: 22px; } h2 { font-size: 19px; } h3 { font-size: 16px; }
+    h4, h5, h6 { font-size: 14px; }
+    blockquote, .gmail_quote { margin: 10px 0; padding: 2px 12px; border-left: 3px solid ${c.rule}; color: ${c.quote}; }
+    blockquote blockquote { border-left-color: ${c.link}; }
+    .gmail_attr { font-style: italic; color: ${c.quote}; }
     hr { border: 0; border-top: 1px solid ${c.rule}; margin: 12px 0; }
   `;
 }

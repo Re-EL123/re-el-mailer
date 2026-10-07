@@ -10,6 +10,89 @@ import { icon } from '../icons.js';
 import { navigate, refresh } from '../router.js';
 import { pushShortcuts } from '../keys.js';
 
+/**
+ * Length of the "real" text in a sanitised body, ignoring whitespace.
+ *
+ * Damage detection: a body whose text was stripped at ingest still holds its
+ * full element structure (a styled table with empty cells), so an empty text
+ * length is the only way to tell it from a normal body.
+ */
+function visibleTextLength(html) {
+  if (!html) return 0;
+  // bodyHtml is already sanitised, and a <template>'s content is inert, so
+  // this never runs handlers or scripts in the reader's document.
+  const host = document.createElement('template');
+  host.innerHTML = html;
+  return (host.content.textContent || '').replace(/\s/g, '').length;
+}
+
+/**
+ * Format a plain-text body for the reader.
+ *
+ * Text bodies are split on blank lines into paragraphs, which gives an email
+ * rhythm instead of one long wall (and preserves any internal line breaks).
+ * Form-submission services send a Key/Value report — the same rows as their
+ * HTML table, as "label line, blank line, value line" pairs — which reads
+ * terribly as prose, so a run of such pairs is rendered as a real table.
+ *
+ * Returns an array of DOM nodes.
+ */
+export function formatTextBody(text) {
+  const blocks = [];
+  let current = [];
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    if (!line.trim()) {
+      if (current.length) { blocks.push(current); current = []; }
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length) blocks.push(current);
+
+  const paragraph = (block) => el('p', { class: 'reader-para', text: block.join('\n') });
+
+  // A Key/Value pair is exactly two lines: a short label, then its value. A
+  // report is a run of at least two of them in a row. Report labels are single
+  // tokens (name, company_website), never a sentence fragment, so a key must
+  // be one whitespace-free word or the detector would turn any short two-line
+  // paragraph into a table.
+  const isPair = (block) => block.length === 2
+    && /^[^\s.,;!?:()]{1,40}$/.test(block[0])
+    && block[1].length <= 500
+    && block[1].trim() !== '';
+  const firstPair = blocks.findIndex(isPair);
+  let reportStart = -1;
+  let reportEnd = -1;
+  if (firstPair !== -1) {
+    let count = 0;
+    let i = firstPair;
+    while (i < blocks.length && isPair(blocks[i])) { count += 1; i += 1; }
+    if (count >= 2) { reportStart = firstPair; reportEnd = i; }
+  }
+
+  if (reportStart === -1) {
+    return blocks.map((block) => paragraph(block));
+  }
+
+  const parts = [];
+  for (let i = 0; i < reportStart; i += 1) parts.push(paragraph(blocks[i]));
+
+  const tableBody = el('tbody');
+  for (let i = reportStart; i < reportEnd; i += 1) {
+    const [key, value] = blocks[i];
+    tableBody.append(
+      el('tr', {},
+        el('th', { scope: 'row', text: key }),
+        el('td', { text: value })),
+    );
+  }
+  parts.push(el('table', { class: 'reader-report' }, tableBody));
+
+  for (let i = reportEnd; i < blocks.length; i += 1) parts.push(paragraph(blocks[i]));
+  return parts;
+}
+
 function headerLine(label, value) {
   if (!value || (Array.isArray(value) && value.length === 0)) return null;
   // fullAddress, not displayName: a header is where the address is verified.
@@ -155,22 +238,6 @@ export async function renderMessage(container, ctx) {
       // stays on screen above the message for the life of the view.
       mount(body);
 
-/**
- * Length of the "real" text in a sanitised body, ignoring whitespace.
- *
- * Damage detection: a body whose text was stripped at ingest still holds its
- * full element structure (a styled table with empty cells), so an empty text
- * length is the only way to tell it from a normal body.
- */
-function visibleTextLength(html) {
-  if (!html) return 0;
-  // bodyHtml is already sanitised, and a <template>'s content is inert, so
-  // this never runs handlers or scripts in the reader's document.
-  const host = document.createElement('template');
-  host.innerHTML = html;
-  return (host.content.textContent || '').replace(/\s/g, '').length;
-}
-
     // Render body: sanitised HTML in a sandboxed frame, else plain text.
     if (msg.bodyHtml && (visibleTextLength(msg.bodyHtml) > 0 || !msg.bodyText)) {
       // `mountMessageFrame` owns the sandbox tokens, the light content canvas
@@ -180,7 +247,12 @@ function visibleTextLength(html) {
       // nothing could size it, and every body sat in a 150px strip.
       bodyFrame = mountMessageFrame(msg.bodyHtml, body);
     } else if (msg.bodyText) {
-      body.append(el('pre', { class: 'reader-text', text: msg.bodyText }));
+      const textParts = formatTextBody(msg.bodyText);
+      if (textParts.length) {
+        body.append(el('div', { class: 'reader-text-body' }, ...textParts));
+      } else {
+        body.append(el('p', { class: 'muted', text: 'This message has no readable text.' }));
+      }
     } else {
       body.append(el('p', { class: 'muted', text: 'This message has no body.' }));
     }

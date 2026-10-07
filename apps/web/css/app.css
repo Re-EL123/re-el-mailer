@@ -282,8 +282,22 @@ textarea { resize: vertical; }
    because a header can now be a dozen To recipients or one very long address. */
 .hdr-value { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
 .reader-body { padding: 20px 16px 60px; max-width: 860px; }
-.reader-text { white-space: pre-wrap; font: inherit; margin: 0; }
-.reader-html { line-height: 1.6; }
+.reader-html { line-height: 1.6; margin: 4px 0 14px; }
+
+/* The plain-text fallback: paragraphs with a preserved line-break rhythm, and
+   form-submission Key/Value reports promoted to a table so they read like the
+   HTML the sender intended instead of a wall of "label / value" lines. */
+.reader-text-body p { margin: 10px 0; }
+.reader-para { white-space: pre-wrap; }
+.reader-report { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+.reader-report th,
+.reader-report td {
+  text-align: left; vertical-align: top; padding: 8px 10px 8px 0;
+  border-bottom: 1px solid var(--border); word-break: break-word;
+}
+.reader-report th { width: 32%; min-width: 140px; font-weight: 600; color: var(--muted); }
+.reader-report tr:last-child th,
+.reader-report tr:last-child td { border-bottom: 0; }
 
 /*
  * Message bodies render in a sandboxed iframe with no allow-same-origin, so this
@@ -293,12 +307,18 @@ textarea { resize: vertical; }
  * in this document and writes an explicit height; `min-height` is only the floor
  * for that measurement, and the frame still scrolls internally if a late-loading
  * image grows it past the estimate.
+ *
+ * The frame is a white card — email content is authored for a light canvas — so
+ * it is drawn as its own surface (rounded, bordered) rather than floating on
+ * the app background. Iframe border-radius clips the framed content.
  */
 .reader-frame {
   width: 100%;
   min-height: 140px;
-  border: 0;
-  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(10, 16, 32, 0.07);
   display: block;
 }
 

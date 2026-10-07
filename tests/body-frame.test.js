@@ -125,6 +125,23 @@ describe('canvas', () => {
     expect(frame.srcdoc).not.toMatch(/prefers-color-scheme/);
   });
 
+  it('applies a typographic and quoted-reply polish to the framed content', () => {
+    const { frame } = mountMessageFrame('<blockquote><p>Quoted</p></blockquote>', host);
+
+    // Emails only ever sit in a readable envelope: a centred column, a
+    // restrained heading scale, and roomy paragraph rhythm.
+    expect(frame.srcdoc).toContain('max-width: 880px');
+    expect(frame.srcdoc).toContain('h1 { font-size: 22px; }');
+    expect(frame.srcdoc).toContain('p { margin: 8px 0; }');
+
+    // Replies come in as <blockquote class="gmail_quote"> (Gmail) or a plain
+    // blockquote; both get an indented quoteblock, and nested quotes re-tint
+    // so a reply-to-a-reply stays distinguishable.
+    expect(frame.srcdoc).toContain('blockquote, .gmail_quote');
+    expect(frame.srcdoc).toContain('blockquote blockquote { border-left-color:');
+    expect(frame.srcdoc).toContain('.gmail_attr');
+  });
+
   it('keeps the canvas stable when the app theme changes while open', async () => {
     const { frame } = mountMessageFrame('<p>Hello</p>', host);
     expect(frame.srcdoc).toContain('background: #ffffff');
