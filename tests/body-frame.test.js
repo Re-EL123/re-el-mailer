@@ -19,7 +19,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BODY_SANDBOX, mountMessageFrame } from '../apps/web/js/body-frame.js';
+import { BODY_SANDBOX, ensureLegible, mountMessageFrame } from '../apps/web/js/body-frame.js';
 
 /** A host to mount into, cleared between tests. */
 let host;
@@ -209,6 +209,80 @@ describe('the measurement copy', () => {
     expect(box.style.visibility).toBe('hidden');
     expect(box.style.pointerEvents).toBe('none');
     expect(box.style.left.startsWith('-')).toBe(true);
+  });
+});
+
+describe('ensureLegible', () => {
+  it('forces light text onto a dark inline background when the email left no text colour', () => {
+    // The classic "styled square with no text": the background survives
+    // sanitisation, the sheet that carried the matching text colour does not.
+    const result = ensureLegible('<table><tr><td style="background:#1f2430">Dark</td></tr></table>');
+    expect(result).toContain('background:#1f2430');
+    expect(result).toContain('color:#ffffff');
+  });
+
+  it('walks up to the background of an enclosing cell for nested text', () => {
+    const result = ensureLegible('<table><tr><td style="background:#1f2430"><p>Dark</p></td></tr></table>');
+    expect(result).toContain('<p style="color:#ffffff">Dark</p>');
+  });
+
+  it('sees the bgcolor attribute, which classic email HTML still uses', () => {
+    const result = ensureLegible('<table bgcolor="#1f2430"><tr><td>Dark</td></tr></table>');
+    expect(result).toContain('<td style="color:#ffffff">Dark</td>');
+  });
+
+  it('leaves a readable pair alone', () => {
+    const result = ensureLegible('<table><tr><td style="background:#111111;color:#ffffff">ok</td></tr></table>');
+    expect(result).toContain('style="background:#111111;color:#ffffff"');
+    expect(result).not.toContain('color:#ffffff;color');
+  });
+
+  it('leaves plain text on the light canvas alone', () => {
+    expect(ensureLegible('<p>Plain</p>')).toBe('<p>Plain</p>');
+  });
+
+  it('forces dark text when the email paints white text on white', () => {
+    const result = ensureLegible('<table><tr><td style="background:#ffffff;color:#ffffff">white</td></tr></table>');
+    expect(result).toContain('color:#ffffff;color:#1b2233');
+  });
+
+  it('repairs an explicit black-on-black pair', () => {
+    const result = ensureLegible('<table><tr><td style="background:#000000;color:#000000">x</td></tr></table>');
+    expect(result).toContain('color:#ffffff');
+  });
+
+  it('fixes links on dark backgrounds without breaking the href', () => {
+    const result = ensureLegible('<a href="https://re-el.co.za" style="background:#1f2430">Link</a>');
+    expect(result).toContain('href="https://re-el.co.za"');
+    expect(result).toContain('color:#ffffff');
+  });
+
+  it('never touches a stylesheet, whose text is CSS not content', () => {
+    const result = ensureLegible('<style>.dark { color: #fff }</style>');
+    expect(result).toContain('.dark { color: #fff }');
+    expect(result).not.toContain('color:#ffffff;');
+  });
+
+  it('changes nothing but the colour: layout markup passes through untouched', () => {
+    const result = ensureLegible('<table><tr><td style="background:#1f2430">Dark</td></tr></table>');
+    expect(result).toContain('<td style="background:#1f2430;color:#ffffff">Dark</td>');
+  });
+});
+
+describe('mountMessageFrame readability', () => {
+  it('renders forced-readable text in the frame', () => {
+    const { frame } = mountMessageFrame('<table><tr><td style="background:#1f2430">Dark</td></tr></table>', host);
+    expect(frame.srcdoc).toContain('color:#ffffff');
+    expect(frame.srcdoc).toContain('>Dark<');
+  });
+
+  it('measures the same forced-readable copy, so heights and colours agree', () => {
+    mountMessageFrame('<table><tr><td style="background:#1f2430">Dark</td></tr></table>', host);
+    const root = document.querySelector('[data-message-measurer]');
+    expect(root).not.toBeNull();
+    const body = (root.shadowRoot || root).querySelector('body');
+    expect(body.innerHTML).toContain('color:#ffffff');
+    expect(body.innerHTML).toContain('>Dark<');
   });
 });
 

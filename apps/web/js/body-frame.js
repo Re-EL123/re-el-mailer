@@ -101,6 +101,174 @@ function srcdoc(html) {
 </head><body>${html}</body></html>`;
 }
 
+// ─── Readability ─────────────────────────────────────────────────────────────
+//
+// A sender's background colours survive sanitisation (inline `style` and the
+// `bgcolor` attribute are kept) but the matching text colours usually live in
+// the `<style>` sheet, and for anything stored before the sanitizer kept
+// sheets — that is, mail already in the box — the sheet is gone for good. The
+// frame's fallback text colour is then painted over the sender's own
+// backgrounds: dark text on a dark cell reads as a "styled square with no
+// text", and no server-side change can re-add what was never stored.
+//
+// So readability is enforced here, over whatever the sanitizer kept. For every
+// run of text, the contrast between the colour it will actually render and the
+// background the email painted behind it is checked, and a readable colour is
+// forced wherever the pair would fail. This sits on the end of the pipeline, so
+// it cannot know about a sheet the sanitizer dropped — and does not need to:
+// backgrounds that read the email rely on are inline or bgcolor, making them
+// the reliable signal to judge against.
+
+const READABLE_RATIO = 3; // WCAG AA for large text; fixes always force ≥ 4.5:1
+const DARK_BACKGROUND_LUMINANCE = 0.33;
+
+const NAMED_COLORS = new Map([
+  ['black', '#000000'], ['white', '#ffffff'], ['gray', '#808080'], ['grey', '#808080'],
+  ['silver', '#c0c0c0'], ['maroon', '#800000'], ['red', '#ff0000'], ['purple', '#800080'],
+  ['fuchsia', '#ff00ff'], ['green', '#008000'], ['lime', '#00ff00'], ['olive', '#808000'],
+  ['yellow', '#ffff00'], ['navy', '#000080'], ['blue', '#0000ff'], ['teal', '#008080'],
+  ['aqua', '#00ffff'], ['orange', '#ffa500'], ['crimson', '#dc143c'], ['brown', '#a52a2a'],
+  ['gold', '#ffd700'], ['pink', '#ffc0cb'], ['chocolate', '#d2691e'], ['indigo', '#4b0082'],
+  ['violet', '#ee82ee'], ['cyan', '#00ffff'],
+]);
+
+function clampRGB(n) { return n < 0 ? 0 : n > 255 ? 255 : Math.round(n); }
+
+/** Parse a colour string (hex, rgb()/rgba(), named) into [r,g,b], else null. */
+function parseColor(value) {
+  if (!value) return null;
+  let s = String(value).trim().toLowerCase();
+  if (!s || s === 'transparent' || s === 'none' || s === 'initial' || s === 'inherit') return null;
+  if (NAMED_COLORS.has(s)) s = NAMED_COLORS.get(s);
+
+  let m = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(s);
+  if (m) {
+    let hex = m[1];
+    if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+    ];
+  }
+
+  m = /^rgba?\(([^)]*)\)$/.exec(s);
+  if (m) {
+    const parts = m[1].split(',').map((part) => parseFloat(part.trim()));
+    if (parts.length >= 3 && parts.slice(0, 3).every(Number.isFinite)) {
+      return [clampRGB(parts[0]), clampRGB(parts[1]), clampRGB(parts[2])];
+    }
+  }
+  return null;
+}
+
+/** The first colour token in a CSS declaration value, else null. */
+function firstColor(declaration) {
+  const cleaned = String(declaration || '').replace(/url\([^)]*\)/g, '');
+  const hex = /(#[0-9a-f]{3,8})\b/i.exec(cleaned);
+  if (hex) return parseColor(hex[1]);
+  const func = /rgba?\(([^)]*)\)/i.exec(cleaned);
+  if (func) return parseColor(func[0]);
+  for (const word of cleaned.split(/[,\s]+/)) {
+    const lower = word.trim().toLowerCase();
+    if (NAMED_COLORS.has(lower)) return parseColor(lower);
+  }
+  return null;
+}
+
+/** Parse `background`/`background-color` (background checked last) from a style attribute. */
+function backgroundOf(styleText) {
+  const colorRe = /(?:^|[;\s])background-color\s*:\s*([^;]*)/i;
+  const bgRe = /(?:^|[;\s])background\s*:\s*([^;]*)/i;
+  const m = colorRe.exec(String(styleText || '')) || bgRe.exec(String(styleText || ''));
+  return m ? firstColor(m[1]) : null;
+}
+
+/** Parse the `color` declaration from a style attribute. */
+function colorOf(styleText) {
+  const m = /(?:^|[;\s])color\s*:\s*([^;]*)/i.exec(String(styleText || ''));
+  return m ? firstColor(m[1]) : null;
+}
+
+/** Relative luminance (WCAG) of [r,g,b]. */
+function relativeLuminance([r, g, b]) {
+  const linear = (v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+/** WCAG contrast ratio of two [r,g,b] colours, from 1 (identical) to 21. */
+function contrast([r1, g1, b1], [r2, g2, b2]) {
+  const a = relativeLuminance([r1, g1, b1]);
+  const b = relativeLuminance([r2, g2, b2]);
+  const [hi, lo] = a >= b ? [a, b] : [b, a];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** The background that will actually sit behind `element`'s text. */
+function backgroundBehind(element) {
+  let node = element;
+  while (node) {
+    if (node.nodeType === 1) {
+      const bg = backgroundOf(node.getAttribute('style')) || parseColor(node.getAttribute('bgcolor'));
+      if (bg) return bg;
+    }
+    node = node.parentElement;
+  }
+  return [255, 255, 255]; // the frame's light canvas
+}
+
+/** The text colour `element` will actually render: inline, inherited, or the frame default. */
+function renderedColor(element) {
+  let node = element;
+  let insideLink = false;
+  while (node) {
+    if (node.nodeType === 1) {
+      if (node.tagName.toLowerCase() === 'a') insideLink = true;
+      const color = colorOf(node.getAttribute('style'));
+      if (color) return color;
+    }
+    node = node.parentElement;
+  }
+  return insideLink ? [0x1a, 0x5f, 0xb4] : [0x1b, 0x22, 0x33];
+}
+
+/**
+ * Force every run of email text to be legible against the background it sits
+ * on, and return the body HTML with the fixes applied.
+ *
+ * Only elements holding text of their own are touched, so a single inline
+ * `color` cascades to that text and its descendants. The change is appended to
+ * the element's style attribute so it always wins over what was there, and the
+ * result is used for both the frame and the measuring host, keeping their
+ * layouts identical.
+ */
+export function ensureLegible(html) {
+  const parsed = new DOMParser().parseFromString(`<body>${html || ''}</body>`, 'text/html');
+
+  for (const element of parsed.body.querySelectorAll('*')) {
+    const tag = element.tagName.toLowerCase();
+    if (tag === 'style' || tag === 'script' || tag === 'noscript') continue;
+
+    const hasText = [...element.childNodes].some(
+      (node) => node.nodeType === 3 && /\S/.test(node.textContent || ''),
+    );
+    if (!hasText) continue;
+
+    const background = backgroundBehind(element);
+    const color = renderedColor(element);
+    if (contrast(color, background) >= READABLE_RATIO) continue;
+
+    const fix = relativeLuminance(background) < DARK_BACKGROUND_LUMINANCE ? '#ffffff' : '#1b2233';
+    const existing = element.getAttribute('style');
+    element.setAttribute('style', `${existing ? existing + ';' : ''}color:${fix}`);
+  }
+
+  return parsed.body.innerHTML;
+}
+
 /**
  * Strip anything that could execute, from a parsed document, before it is moved
  * into this one.
@@ -250,6 +418,10 @@ export function mountMessageFrame(html, host) {
   wrapper.append(frame);
   host.append(wrapper);
 
+  // Apply the readability pass once, to the copy both the frame and the
+  // measuring host render. They must see byte-identical content or the height
+  // would be measured on a different layout.
+  const bodyHtml = ensureLegible(html);
   let destroyed = false;
 
   /** Read the current width of the frame's box, which is the wrapper's. */
@@ -271,7 +443,7 @@ export function mountMessageFrame(html, host) {
   async function applyHeight({ withImages = false } = {}) {
     if (destroyed) return;
 
-    const { host: box, body: measured } = createMeasurer(html, frameWidth());
+    const { host: box, body: measured } = createMeasurer(bodyHtml, frameWidth());
 
     // Text is laid out already, so this reading is final for text-only bodies
     // and merely a good first estimate for the rest. It is written straight
@@ -295,7 +467,7 @@ export function mountMessageFrame(html, host) {
 
   // First paint: text already has a height, images do not, so measure now and
   // again once they are in.
-  frame.srcdoc = srcdoc(html);
+  frame.srcdoc = srcdoc(bodyHtml);
   applyHeight({ withImages: true });
 
   // Re-measure when the frame's box changes. Emails are mostly fixed-width
