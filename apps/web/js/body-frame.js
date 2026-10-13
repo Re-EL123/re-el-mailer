@@ -276,6 +276,58 @@ export function ensureLegible(html) {
 }
 
 /**
+ * The attachment an inline reference (`cid:` token) points at.
+ *
+ * Messages carry inline images as separate attachments; the HTML writes an
+ * `<img src="cid:token">` where token matches the attachment's Content-ID
+ * (often "image001.gif@01DD5AF5.56846EF0"), and a text export of the same
+ * message keeps the reference as "[cid:token]". Match the Content-ID exactly
+ * first, then fall back to the filename before the "@", which most exporters
+ * put in the token.
+ *
+ * @returns {{id: string, filename: string, mimeType: string, contentId: string|null} | null}
+ */
+export function matchCid(token, attachments) {
+  const needle = String(token || '').trim();
+  if (!needle || !attachments?.length) return null;
+  const byContentId = attachments.find((att) => att.contentId === needle);
+  if (byContentId) return byContentId;
+  const name = needle.split('@')[0];
+  if (!name) return null;
+  return attachments.find((att) => att.filename === name) || null;
+}
+
+/**
+ * Resolve every `cid:` image reference in a body to a signed attachment URL so
+ * the inline image actually renders. The URLs come from one API call per image,
+ * so this works on a DOMParser copy (inert, never runs anything) and returns
+ * the body with the `src` replaced; references nothing matches is left alone.
+ *
+ * @param {string} html sanitised message body
+ * @param {{id: string}[]} attachments
+ * @param {(attachmentId: string) => Promise<string>} loadUrl resolves an inline download URL
+ * @returns {Promise<string>} the body with cid: images resolved
+ */
+export async function resolveInlineImages(html, attachments, loadUrl) {
+  if (!html || !html.includes('cid:') || !attachments?.length) return html;
+  const parsed = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+
+  const pending = [];
+  for (const img of parsed.body.querySelectorAll('img[src^="cid:"]')) {
+    const token = img.getAttribute('src').slice(4);
+    const attachment = matchCid(token, attachments);
+    if (!attachment) continue;
+    pending.push(
+      loadUrl(attachment.id).then((url) => {
+        if (url) img.setAttribute('src', url);
+      }).catch(() => {}),
+    );
+  }
+  await Promise.all(pending);
+  return parsed.body.innerHTML;
+}
+
+/**
  * Strip anything that could execute, from a parsed document, before it is moved
  * into this one.
  *

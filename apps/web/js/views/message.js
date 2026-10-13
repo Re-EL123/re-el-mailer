@@ -4,7 +4,7 @@
  */
 
 import { api } from '../api.js';
-import { mountMessageFrame } from '../body-frame.js';
+import { matchCid, mountMessageFrame, resolveInlineImages } from '../body-frame.js';
 import { displayName, el, formatBytes, fullAddress, fullDate, mount, skeletonCards, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { navigate, refresh } from '../router.js';
@@ -27,6 +27,73 @@ function visibleTextLength(html) {
 }
 
 /**
+ * Turn the raw string of a plain-text body into safe reader nodes:
+ *
+ * - http(s) / www / email addresses become real links (mailto: for the last).
+ * - An exporter's link suitcase — `display<http://…>`, `name<mailto:…>` — comes
+ *   out as one clean link using the explicit href, not the literal text.
+ * - `[cid:token]` inline-image references become placeholders the reader
+ *   hydrates into the attachment image once a signed URL is available.
+ *
+ * Everything emitted is built with `el`, so user content is text, never markup.
+ */
+const LINK_SOURCE = [
+  '([^\\s<]+)\\s*<(https?://[^>\\s]+|mailto:[^>\\s]+|tel:[^>\\s]+|ftp://[^>\\s]+)>', // 1,2: display<href> suitcase
+  '\\[cid:([^\\]]+)\\]',                                                            // 3: inline image token
+  '(https?://[^\\s<>"\')]+)',                                                        // 4: bare url
+  '(www\\.[^\\s<>"\')]+)',                                                           // 5: bare www
+  '([a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,})',                                          // 6: bare email
+];
+const LINK_RE = new RegExp(LINK_SOURCE.join('|'), 'gi');
+
+/** Keep a balanced closing bracket; drop punctuation glued onto a URL. */
+function trimUrl(url) {
+  let end = url.length;
+  while (end > 0 && /[.,;:!?]/.test(url[end - 1])) end -= 1;
+  while (end > 0 && /["')\]}»]/.test(url[end - 1])) {
+    const open = { ')': '(', ']': '[', '}': '{', '»': '«', '"': '"', "'": "'" }[url[end - 1]];
+    if (url.slice(0, end).lastIndexOf(open) !== -1) break;
+    end -= 1;
+  }
+  return url.slice(0, end);
+}
+
+function linkify(text, attachments) {
+  const nodes = [];
+  let last = 0;
+  for (const match of text.matchAll(LINK_RE)) {
+    const full = match[0];
+    const [, display, suiteHref, cidToken, bareUrl, www, email] = match;
+    if (match.index > last) nodes.push(document.createTextNode(text.slice(last, match.index)));
+
+    if (suiteHref) {
+      nodes.push(el('a', { class: 'autolink', href: suiteHref, target: '_blank', rel: 'noopener', text: display }));
+    } else if (cidToken) {
+      const att = attachments && matchCid(cidToken, attachments);
+      const isImage = att && /^image\//.test(att.mimeType || '');
+      if (isImage) {
+        const span = el('span', { class: 'reader-cid', 'data-cid': cidToken, title: att.filename });
+        span.append(document.createTextNode(full));
+        nodes.push(span);
+      } else {
+        nodes.push(document.createTextNode(full));
+      }
+    } else {
+      const raw = bareUrl || www || email;
+      const clean = trimUrl(raw) || raw;
+      // www and email need a scheme only the linkifier can supply; a bare URL
+      // is already self-addressing. Such hrefs are derived from text that the
+      // regex above pinned to http(s)/mailto, so nothing else can slip through.
+      const href = bareUrl ? clean : (www ? `https://${clean}` : `mailto:${clean}`);
+      nodes.push(el('a', { class: 'autolink', href, target: '_blank', rel: 'noopener', text: clean }));
+    }
+    last = match.index + full.length;
+  }
+  if (last < text.length) nodes.push(document.createTextNode(text.slice(last)));
+  return nodes;
+}
+
+/**
  * Format a plain-text body for the reader.
  *
  * Text bodies are split on blank lines into paragraphs, which gives an email
@@ -34,10 +101,11 @@ function visibleTextLength(html) {
  * Form-submission services send a Key/Value report — the same rows as their
  * HTML table, as "label line, blank line, value line" pairs — which reads
  * terribly as prose, so a run of such pairs is rendered as a real table.
+ * Links and `[cid:…]` inline images are resolved from the plain text.
  *
  * Returns an array of DOM nodes.
  */
-export function formatTextBody(text) {
+export function formatTextBody(text, attachments) {
   const blocks = [];
   let current = [];
   for (const raw of String(text ?? '').split(/\r?\n/)) {
@@ -50,7 +118,17 @@ export function formatTextBody(text) {
   }
   if (current.length) blocks.push(current);
 
-  const paragraph = (block) => el('p', { class: 'reader-para', text: block.join('\n') });
+  const paragraph = (block) => {
+    const p = el('p', { class: 'reader-para' });
+    for (const node of linkify(block.join('\n'), attachments)) p.append(node);
+    return p;
+  };
+  const cell = (value, scope) => {
+    const th = scope === 'row';
+    const node = el(th ? 'th' : 'td', th ? { scope: 'row' } : {});
+    for (const part of linkify(value, attachments)) node.append(part);
+    return node;
+  };
 
   // A Key/Value pair is exactly two lines: a short label, then its value. A
   // report is a run of at least two of them in a row. Report labels are single
@@ -81,16 +159,29 @@ export function formatTextBody(text) {
   const tableBody = el('tbody');
   for (let i = reportStart; i < reportEnd; i += 1) {
     const [key, value] = blocks[i];
-    tableBody.append(
-      el('tr', {},
-        el('th', { scope: 'row', text: key }),
-        el('td', { text: value })),
-    );
+    tableBody.append(el('tr', {}, cell(key, 'row'), cell(value)));
   }
   parts.push(el('table', { class: 'reader-report' }, tableBody));
 
   for (let i = reportEnd; i < blocks.length; i += 1) parts.push(paragraph(blocks[i]));
   return parts;
+}
+
+/**
+ * Swap `reader-cid` placeholders (inline-image references in a text body) for
+ * the real attachment image. Unresolvable references keep their bracket text.
+ */
+async function hydrateTextCids(holder, attachments, messageId, mailboxId) {
+  for (const span of [...holder.querySelectorAll('.reader-cid')]) {
+    const att = matchCid(span.dataset.cid, attachments);
+    if (!att) continue;
+    try {
+      const data = await api.mail.attachmentUrl(att.id, messageId, true, mailboxId);
+      span.replaceWith(el('img', { class: 'attach-img', src: data.url, alt: att.filename }));
+    } catch {
+      // Leave the bracket text: an offline-friendly fallback beats a broken icon.
+    }
+  }
 }
 
 function headerLine(label, value) {
@@ -245,11 +336,20 @@ export async function renderMessage(container, ctx) {
       // live here — claiming the frame sizes itself from its content — was the
       // bug: without allow-same-origin this page cannot read into it, so
       // nothing could size it, and every body sat in a 150px strip.
-      bodyFrame = mountMessageFrame(msg.bodyHtml, body);
+      // `cid:` image references are resolved to signed URLs first so a
+      // sender's inline logo actually renders instead of an empty box.
+      const resolvedHtml = await resolveInlineImages(
+        msg.bodyHtml,
+        msg.attachments,
+        (attId) => api.mail.attachmentUrl(attId, id, true, mailboxId).then((data) => data.url),
+      );
+      bodyFrame = mountMessageFrame(resolvedHtml, body);
     } else if (msg.bodyText) {
-      const textParts = formatTextBody(msg.bodyText);
+      const textParts = formatTextBody(msg.bodyText, msg.attachments);
       if (textParts.length) {
-        body.append(el('div', { class: 'reader-text-body' }, ...textParts));
+        const holder = el('div', { class: 'reader-text-body' }, ...textParts);
+        body.append(holder);
+        hydrateTextCids(holder, msg.attachments, id, mailboxId);
       } else {
         body.append(el('p', { class: 'muted', text: 'This message has no readable text.' }));
       }
@@ -258,17 +358,35 @@ export async function renderMessage(container, ctx) {
     }
 
       if (msg.attachments?.length) {
+        const chips = [];
+        msg.attachments.forEach((att) => {
+          const isImage = /^image\//.test(att.mimeType || '');
+          const chip = el('button', { class: 'attach-chip', title: att.filename, onClick: () => openAttachment(att) },
+            isImage ? el('img', { class: 'attach-preview', alt: '' }) : icon('paperclip'),
+            el('span', { class: 'attach-name', text: att.filename }),
+            el('span', { class: 'muted small', text: formatBytes(att.sizeBytes) }),
+          );
+          chips.push({ chip, att, isImage });
+        });
         body.append(
           el('div', { class: 'attachments' },
             el('h3', { text: `Attachments (${msg.attachments.length})` }),
-            ...msg.attachments.map((att) =>
-              el('button', { class: 'attach-chip', title: att.filename, onClick: () => openAttachment(att) },
-                icon('paperclip'), el('span', { text: att.filename }),
-                el('span', { class: 'muted small', text: formatBytes(att.sizeBytes) }),
-              ),
-            ),
+            ...chips.map(({ chip }) => chip),
           ),
         );
+
+        // Image attachments preview themselves: fetch each signed URL and let
+        // it load into the chip. A failed fetch leaves the icon placeholder.
+        for (const { chip, att, isImage } of chips) {
+          if (!isImage) continue;
+          const img = chip.firstElementChild;
+          try {
+            const data = await api.mail.attachmentUrl(att.id, id, true, mailboxId);
+            img.src = data.url;
+          } catch {
+            img.replaceWith(icon('paperclip'));
+          }
+        }
       }
 
       if (data.thread?.length > 1) {

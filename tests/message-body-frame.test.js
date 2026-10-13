@@ -35,12 +35,13 @@ const SAFE_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
  * timeout rather than a failure. Callers wait on `.reader-toolbar`, which is
  * rendered either way.
  */
-async function mountReader(bodyHtml, overrides = {}) {
+async function mountReader(bodyHtml, overrides = {}, routes = {}) {
   const container = document.createElement('div');
   document.body.append(container);
 
   stubApi(defaultRoutes({
     'action=get': { message: fakeMessage({ bodyHtml, bodyText: 'fallback', ...overrides }), thread: [] },
+    ...routes,
   }));
 
   const { adoptSession } = await import('../apps/web/js/store.js');
@@ -214,5 +215,82 @@ describe('editing a draft from the reader', () => {
 
     const sentView = await mountReader('<p>Hello</p>', { isDraft: false });
     expect(sentView.container.querySelector('.reader-toolbar [aria-label="Edit draft"]')).toBeNull();
+  });
+});
+
+describe('urls and inline images', () => {
+  /** Wait until `predicate` is true or a 1s budget runs out. */
+  async function until(predicate) {
+    const started = Date.now();
+    for (;;) {
+      if (predicate()) return;
+      if (Date.now() - started > 1000) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  it('turns URLs in a plain-text body into clickable, safe links', async () => {
+    const { container } = await mountReader('', {
+      bodyHtml: '',
+      bodyText: 'Visit www.re-el.co.za and mail ada@re-el.co.za',
+    });
+
+    const links = [...container.querySelectorAll('.reader-para a.autolink')];
+    expect(links.length).toBe(2);
+    expect(links[0].getAttribute('href')).toBe('https://www.re-el.co.za');
+    expect(links[1].getAttribute('href')).toBe('mailto:ada@re-el.co.za');
+    for (const link of links) {
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(link.getAttribute('rel')).toBe('noopener');
+    }
+  });
+
+  it('resolves a [cid:…] reference in a text body to the attachment image', async () => {
+    const { container } = await mountReader(
+      '',
+      {
+        bodyHtml: '',
+        bodyText: 'Signed: [cid:image001.gif@01DD5AF5.01]',
+        attachments: [{ id: 'att_1', filename: 'image001.gif', mimeType: 'image/gif', sizeBytes: 1000, inline: true, contentId: null }],
+      },
+      { 'action=attachment-url': { url: 'https://cdn.example/att/att_1', filename: 'image001.gif' } },
+    );
+
+    const img = await waitFor('img.attach-img', container);
+    await until(() => img.getAttribute('src') === 'https://cdn.example/att/att_1');
+    expect(img.getAttribute('alt')).toBe('image001.gif');
+  });
+
+  it('previews image attachments with a thumbnail in the chip', async () => {
+    const { container } = await mountReader(
+      '',
+      {
+        bodyHtml: '',
+        bodyText: 'Hi',
+        attachments: [{ id: 'att_2', filename: 'logo.png', mimeType: 'image/png', sizeBytes: 500, inline: false, contentId: null }],
+      },
+      { 'action=attachment-url': { url: 'https://cdn.example/att/att_2', filename: 'logo.png' } },
+    );
+
+    const preview = container.querySelector('.attach-chip img.attach-preview');
+    expect(preview).not.toBeNull();
+    await until(() => preview.getAttribute('src') === 'https://cdn.example/att/att_2');
+    expect(preview.getAttribute('alt')).toBe('');
+  });
+
+  it('keeps a paperclip icon when an image thumbnail cannot load', async () => {
+    const { container } = await mountReader(
+      '',
+      {
+        bodyHtml: '',
+        bodyText: 'Hi',
+        attachments: [{ id: 'att_3', filename: 'broken.png', mimeType: 'image/png', sizeBytes: 10, inline: false, contentId: null }],
+      },
+      { 'action=attachment-url': null },
+    );
+
+    await waitFor('button.attach-chip', container);
+    await until(() => container.querySelector('.attach-chip svg'));
+    expect(container.querySelector('.attach-chip img.attach-preview')).toBeNull();
   });
 });

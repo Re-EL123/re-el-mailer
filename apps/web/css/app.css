@@ -327,7 +327,21 @@ textarea { resize: vertical; }
 .attach-chip {
   border: 1px solid var(--border); background: var(--surface);
   border-radius: var(--radius); padding: 6px 10px; cursor: pointer; font: inherit; font-size: 13px;
+  text-align: left; margin: 4px 0;
 }
+/* Image attachment thumbnails load straight into the chip. */
+.attach-preview {
+  height: 34px; width: auto; max-width: 56px; object-fit: cover;
+  border-radius: 6px; background: var(--surface); flex: none;
+}
+.attach-name { overflow-wrap: anywhere; }
+/* Links the formatter adds to plain-text bodies: underlined on hover, and
+   readable at the app's text size rather than relying on default styling. */
+.autolink { color: var(--text); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--text) 45%, transparent); }
+.autolink:hover { color: var(--brand); }
+/* A [cid:…] reference held until its signed URL arrives: sized to read as the
+   image slot it will become, never as empty space when it cannot resolve. */
+.reader-cid { display: inline-block; margin: 6px 0; }
 .attach-img { max-width: 100%; border-radius: var(--radius); margin-top: 8px; }
 
 .thread { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 16px; }

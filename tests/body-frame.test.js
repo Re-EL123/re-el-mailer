@@ -19,7 +19,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BODY_SANDBOX, ensureLegible, mountMessageFrame } from '../apps/web/js/body-frame.js';
+import { BODY_SANDBOX, ensureLegible, matchCid, mountMessageFrame, resolveInlineImages } from '../apps/web/js/body-frame.js';
 
 /** A host to mount into, cleared between tests. */
 let host;
@@ -300,6 +300,64 @@ describe('mountMessageFrame readability', () => {
     const body = (root.shadowRoot || root).querySelector('body');
     expect(body.innerHTML).toContain('color:#ffffff');
     expect(body.innerHTML).toContain('>Dark<');
+  });
+});
+
+describe('matchCid', () => {
+  const IMAGES = [
+    { id: 'att_1', filename: 'image001.gif', mimeType: 'image/gif', contentId: 'image001.gif@01DD5AF5.56846EF0' },
+    { id: 'att_2', filename: 'logo.png', mimeType: 'image/png', contentId: null },
+  ];
+
+  it('resolves a token to the attachment by its Content-ID', () => {
+    expect(matchCid('image001.gif@01DD5AF5.56846EF0', IMAGES).id).toBe('att_1');
+  });
+
+  it('falls back to the filename carried before the "@"', () => {
+    expect(matchCid('logo.png@ABC123', IMAGES).id).toBe('att_2');
+    expect(matchCid('image001.gif@anything', IMAGES).id).toBe('att_1');
+  });
+
+  it('returns null for a token nothing matches, or without attachments', () => {
+    expect(matchCid('missing@x', IMAGES)).toBeNull();
+    expect(matchCid('logo.png', [])).toBeNull();
+    expect(matchCid(null, IMAGES)).toBeNull();
+  });
+});
+
+describe('resolveInlineImages', () => {
+  const IMAGE = { id: 'att_1', filename: 'image001.gif', mimeType: 'image/gif', contentId: 'image001.gif@01DD5AF5.56846EF0' };
+  const loadUrl = vi.fn(async (attId) => `https://cdn.example/att/${attId}`);
+
+  it('rewrites cid: image srcs to signed URLs', async () => {
+    const html = '<p>Top</p><img src="cid:image001.gif@01DD5AF5.56846EF0" alt="logo">';
+
+    const out = await resolveInlineImages(html, [IMAGE], loadUrl);
+
+    expect(loadUrl).toHaveBeenCalledWith('att_1');
+    expect(out).toContain('src="https://cdn.example/att/att_1"');
+    expect(out).not.toContain('cid:');
+    expect(out).toContain('<p>Top</p>');
+  });
+
+  it('leaves an unknown cid reference untouched', async () => {
+    const html = '<img src="cid:image999.png@X" alt="x">';
+
+    expect(await resolveInlineImages(html, [IMAGE], loadUrl)).toBe(html);
+  });
+
+  it('is a no-op without attachments or cid usage', async () => {
+    expect(await resolveInlineImages('<img src="cid:x" alt="a">', [], loadUrl)).toBe('<img src="cid:x" alt="a">');
+    expect(await resolveInlineImages('<p>Hi</p>', [IMAGE], loadUrl)).toBe('<p>Hi</p>');
+    expect(loadUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues when a signed URL cannot be fetched', async () => {
+    const flaky = vi.fn(async () => { throw new Error('signed URL failed'); });
+
+    const out = await resolveInlineImages('<img src="cid:logo.png@X" alt="a">', [{ id: 'att_2', filename: 'logo.png' }], flaky);
+
+    expect(out).toContain('cid:logo.png');
   });
 });
 

@@ -121,6 +121,9 @@ function listItem(row) {
           mimeType: file.mime_type,
           sizeBytes: Number(file.size_bytes ?? 0),
           inline: Boolean(file.inline),
+          // The Content-ID an <img src="cid:…"> body references. Sent to the
+          // reader so inline images resolve to real attachment URLs.
+          contentId: file.content_id ?? null,
         }))
       : [],
   };

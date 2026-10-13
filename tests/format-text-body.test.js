@@ -90,4 +90,60 @@ describe('formatTextBody', () => {
     expect(formatTextBody('   \n  \n')).toEqual([]);
     expect(formatTextBody()).toEqual([]);
   });
+
+  it('turns bare URLs, www addresses and emails into safe links', () => {
+    const [p] = formatTextBody('See https://ex.co/a?b=1. or www.re-el.co.za, write ada@re-el.co.za');
+
+    const links = [...p.querySelectorAll('a')];
+    expect(links.length).toBe(3);
+    expect(links[0].getAttribute('href')).toBe('https://ex.co/a?b=1');
+    expect(links[0].textContent).toBe('https://ex.co/a?b=1');
+    expect(links[1].getAttribute('href')).toBe('https://www.re-el.co.za');
+    expect(links[2].getAttribute('href')).toBe('mailto:ada@re-el.co.za');
+    for (const link of links) {
+      expect(link.target).toBe('_blank');
+      expect(link.rel).toBe('noopener');
+    }
+  });
+
+  it('unpacks an exporter\'s display<url> suitcase into one clean link', () => {
+    const [p] = formatTextBody('mpillay@pro-tech.co.za<mailto:mpillay@pro-tech.co.za> and www.pro-tech.co.za<http://www.pro-tech.co.za/>');
+
+    const links = [...p.querySelectorAll('a')];
+    expect(links.length).toBe(2);
+    expect(links[0].getAttribute('href')).toBe('mailto:mpillay@pro-tech.co.za');
+    expect(links[0].textContent).toBe('mpillay@pro-tech.co.za');
+    expect(links[1].getAttribute('href')).toBe('http://www.pro-tech.co.za/');
+    expect(links[1].textContent).toBe('www.pro-tech.co.za');
+  });
+
+  it('does not linkify through an angle bracket that is not a URL suitcase', () => {
+    const [p] = formatTextBody('a < b and c > d, no link here');
+    expect(p.querySelectorAll('a').length).toBe(0);
+    expect(p.textContent).toBe('a < b and c > d, no link here');
+  });
+
+  it('keeps a URL that is the whole paragraph intact', () => {
+    const [p] = formatTextBody('http://example.com');
+    const link = p.querySelector('a');
+    expect(link.getAttribute('href')).toBe('http://example.com');
+    expect(link.textContent).toBe('http://example.com');
+  });
+
+  it('turns a matching [cid:…] inline image into a hydratable placeholder', () => {
+    const image = { id: 'att_1', filename: 'image001.gif', mimeType: 'image/gif', contentId: 'image001.gif@01DD5AF5.56846EF0' };
+    const parts = formatTextBody('Here is the file:\n\n[cid:image001.gif]\n\nRegards', [image]);
+
+    const placeholder = parts[1].querySelector('.reader-cid');
+    expect(parts[1].textContent).toBe('[cid:image001.gif]');
+    expect(placeholder).not.toBeNull();
+    expect(placeholder.getAttribute('title')).toBe('image001.gif');
+    expect(placeholder.textContent).toBe('[cid:image001.gif]');
+  });
+
+  it('leaves a cid reference as text when it is not an image or not present', () => {
+    const text = formatTextBody('No image: [cid:logo.eps]', [{ id: 'att_1', filename: 'logo.eps', mimeType: 'application/postscript', contentId: null }]);
+    expect(text[0].querySelector('.reader-cid')).toBeNull();
+    expect(text[0].textContent).toBe('No image: [cid:logo.eps]');
+  });
 });
