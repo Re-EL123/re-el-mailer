@@ -259,4 +259,40 @@ describe('formatTextBody', () => {
       expect(p.textContent).toBe('Login is akani@re-el.co.za');
     });
   });
+
+  describe('line cleanup and reflow', () => {
+    it('drops a lone separator line without splitting the address rows', () => {
+      const parts = formatTextBody('info@pro-tech.co.za\n|\nhttps://pro-tech.co.za');
+
+      expect(parts.length).toBe(1);
+      expect(parts[0].textContent).toBe('info@pro-tech.co.za\nhttps://pro-tech.co.za');
+      expect(parts[0].querySelectorAll('a').length).toBe(2);
+    });
+
+    it('drops a horizontal-rule line', () => {
+      const parts = formatTextBody('Above\n----\nBelow');
+
+      expect(parts.length).toBe(1);
+      expect(parts[0].textContent).toBe('Above\nBelow');
+    });
+
+    it('strips a leading pipe from a line', () => {
+      const [p] = formatTextBody('| https://pro-tech.co.za');
+
+      expect(p.textContent).toBe('https://pro-tech.co.za');
+      expect(p.querySelector('a').getAttribute('href')).toBe('https://pro-tech.co.za');
+    });
+
+    it('joins soft-wrapped lines back into flowing text', () => {
+      const [p] = formatTextBody('The quick brown fox jumps over the lazy\ndog while the cat sleeps');
+
+      expect(p.textContent).toBe('The quick brown fox jumps over the lazy dog while the cat sleeps');
+    });
+
+    it('keeps separate sentences and short signature lines apart', () => {
+      const [p] = formatTextBody('First sentence here.\nsecond sentence starts lowercase\nThanks,\nPro Tech Consulting');
+
+      expect(p.textContent).toBe('First sentence here.\nsecond sentence starts lowercase\nThanks,\nPro Tech Consulting');
+    });
+  });
 });

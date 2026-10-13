@@ -288,7 +288,7 @@ textarea { resize: vertical; }
    form-submission Key/Value reports promoted to a table so they read like the
    HTML the sender intended instead of a wall of "label / value" lines. */
 .reader-text-body p { margin: 10px 0; }
-.reader-para { white-space: pre-wrap; }
+.reader-para { white-space: pre-wrap; overflow-wrap: anywhere; }
 .reader-report { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
 .reader-report th,
 .reader-report td {

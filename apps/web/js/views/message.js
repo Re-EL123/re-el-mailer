@@ -215,15 +215,62 @@ function linkifyLine(line, refs, attachments) {
 }
 
 /**
+ * Clean a single plain-text line for display:
+ *
+ * - A line that is nothing but separator glyphs (`|`) or a rule (`----`, `===`)
+ *   is dropped entirely — Odoo's text signature carries a bare `|` between its
+ *   address rows, which otherwise renders as a stray line of its own.
+ * - A leading `|`/bullet is stripped so a line like `| https://…` shows clean.
+ *
+ * Returns the cleaned line, or `null` when the line should vanish without
+ * leaving a blank behind.
+ */
+function normalizeLine(line) {
+  if (/^\s*(?:\|\s*)+$/.test(line)) return null;
+  if (/^\s*[-_=~]{3,}\s*$/.test(line)) return null;
+  return line.replace(/^\s*[|•·]\s+/, '');
+}
+
+/**
+ * True when `line` reads as the continuation of a hard-wrapped `prev` (mail is
+ * often wrapped at ~72 columns). The guards keep distinct short lines —
+ * signature rows, addresses, deliberate one-liners — from being glued back: a
+ * continuation starts lowercase, follows a line that neither ends a sentence
+ * nor a number, and is not itself a link or address.
+ */
+function isContinuation(prev, line) {
+  const text = prev.trimEnd();
+  if (text.length < 20 || !text) return false;
+  if (/[.!?:]$/.test(text) || /\d$/.test(text)) return false;
+  if (!/^[a-z]/.test(line)) return false;
+  if (/^(https?:|www\.|mailto:|tel:)/i.test(line)) return false;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(line)) return false;
+  return true;
+}
+
+/** Join the soft-wrapped lines of one paragraph back into flowing text. */
+function reflowLines(block) {
+  const merged = [];
+  for (const line of block) {
+    const last = merged.length - 1;
+    if (last >= 0 && isContinuation(merged[last], line)) merged[last] = `${merged[last]} ${line}`;
+    else merged.push(line);
+  }
+  return merged;
+}
+
+/**
  * Format a plain-text body for the reader.
  *
  * Text bodies are split on blank lines into paragraphs, which gives an email
  * rhythm instead of one long wall (and preserves any internal line breaks).
- * Form-submission services send a Key/Value report — the same rows as their
- * HTML table, as "label line, blank line, value line" pairs — which reads
- * terribly as prose, so a run of such pairs is rendered as a real table.
- * Footnote references, links, emphasis and `[cid:…]` inline images are all
- * resolved from the plain text.
+ * Lines that are only a separator glyph or rule are dropped, and soft-wrapped
+ * lines are joined back into flowing text so the paragraph wraps to the reader
+ * width rather than the sender's. Form-submission services send a Key/Value
+ * report — the same rows as their HTML table, as "label line, blank line, value
+ * line" pairs — which reads terribly as prose, so a run of such pairs is
+ * rendered as a real table. Footnote references, links, emphasis and `[cid:…]`
+ * inline images are all resolved from the plain text.
  *
  * Returns an array of DOM nodes.
  */
@@ -232,7 +279,9 @@ export function formatTextBody(text, attachments) {
 
   const blocks = [];
   let current = [];
-  for (const line of lines) {
+  for (const raw of lines) {
+    const line = normalizeLine(raw);
+    if (line === null) continue;
     if (!line.trim()) {
       if (current.length) { blocks.push(current); current = []; }
     } else {
@@ -243,7 +292,7 @@ export function formatTextBody(text, attachments) {
 
   const paragraph = (block) => {
     const p = el('p', { class: 'reader-para' });
-    block.forEach((line, i) => {
+    reflowLines(block).forEach((line, i) => {
       if (i) p.append(document.createTextNode('\n'));
       for (const node of linkifyLine(line, refs, attachments)) p.append(node);
     });
