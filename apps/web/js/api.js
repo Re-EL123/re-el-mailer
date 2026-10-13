@@ -313,6 +313,65 @@ export const api = {
     reply: (id, mode, mailboxId) => get('/send', { action: 'reply', id, mode, mailboxId }),
     forward: (id, attachments, mailboxId) => get('/send', { action: 'forward', id, attachments: attachments ? 1 : undefined, mailboxId }),
     suggest: (q, mailboxId) => get('/send', { action: 'suggest', q, mailboxId }),
+
+    // ── Campaigns (bulk send) ────────────────────────────────────────────
+    campaigns: (mailboxId) => get('/send', { action: 'campaigns', mailboxId }),
+    campaign: (id, mailboxId) => get('/send', { action: 'campaign', id, mailboxId }),
+    createCampaign: (body) => post('/send', body, { action: 'create-campaign', mailboxId: body?.mailboxId }),
+    updateCampaign: (id, body, mailboxId) => put('/send', body, { action: 'update-campaign', id, mailboxId }),
+    deleteCampaign: (id, mailboxId) => del('/send', { action: 'delete-campaign', id, mailboxId }),
+    addCampaignRecipients: (id, recipients, mailboxId) =>
+      post('/send', { id, recipients }, { action: 'campaign-recipients', mailboxId }),
+    sendCampaign: (id, mailboxId) => post('/send', { id }, { action: 'send-campaign', mailboxId }),
+    pauseCampaign: (id, mailboxId) => post('/send', { id }, { action: 'pause-campaign', mailboxId }),
+  },
+
+  // ── Automation ─────────────────────────────────────────────────────────
+  automation: {
+    // Canned responses
+    templates: (mailboxId) => get('/mail', { action: 'templates', mailboxId }),
+    createTemplate: (body, mailboxId) => post('/mail', body, { action: 'create-template', mailboxId }),
+    updateTemplate: (id, body, mailboxId) => put('/mail', body, { action: 'update-template', id, mailboxId }),
+    deleteTemplate: (id, mailboxId) => del('/mail', { action: 'delete-template', id, mailboxId }),
+
+    // Internal notes
+    notes: (messageId, mailboxId) => get('/mail', { action: 'notes', messageId, mailboxId }),
+    createNote: (body, mailboxId) => post('/mail', body, { action: 'create-note', mailboxId }),
+    deleteNote: (id, mailboxId) => del('/mail', { action: 'delete-note', id, mailboxId }),
+
+    // Assignment, snooze and reminders
+    assign: (ids, userId, mailboxId) => post('/mail', { ids, userId }, { action: 'assign', mailboxId }),
+    assignableUsers: (mailboxId) => get('/mail', { action: 'assignable-users', mailboxId }),
+    snooze: (ids, opts, mailboxId) => post('/mail', { ids, ...opts }, { action: 'snooze', mailboxId }),
+    unsnooze: (ids, mailboxId) => post('/mail', { ids }, { action: 'unsnooze', mailboxId }),
+    snoozed: (mailboxId) => get('/mail', { action: 'snoozed', mailboxId }),
+    followUp: (ids, opts, mailboxId) => post('/mail', { ids, ...opts }, { action: 'follow-up', mailboxId }),
+
+    // Rules
+    rules: (mailboxId) => get('/mail', { action: 'rules', mailboxId }),
+    createRule: (body, mailboxId) => post('/mail', body, { action: 'create-rule', mailboxId }),
+    updateRule: (id, body, mailboxId) => put('/mail', body, { action: 'update-rule', id, mailboxId }),
+    deleteRule: (id, mailboxId) => del('/mail', { action: 'delete-rule', id, mailboxId }),
+    ruleRuns: (id, mailboxId) => get('/mail', { action: 'rule-runs', id, mailboxId }),
+
+    // Out-of-office
+    autoReply: (mailboxId) => get('/mail', { action: 'auto-reply', mailboxId }),
+    setAutoReply: (body, mailboxId) => put('/mail', body, { action: 'set-auto-reply', mailboxId }),
+
+    // Outbound webhooks
+    webhooks: (mailboxId) => get('/mail', { action: 'webhooks', mailboxId }),
+    createWebhook: (body, mailboxId) => post('/mail', body, { action: 'create-webhook', mailboxId }),
+    updateWebhook: (id, body, mailboxId) => put('/mail', body, { action: 'update-webhook', id, mailboxId }),
+    deleteWebhook: (id, mailboxId) => del('/mail', { action: 'delete-webhook', id, mailboxId }),
+    webhookDeliveries: (id, mailboxId) => get('/mail', { action: 'webhook-deliveries', id, mailboxId }),
+
+    // Notifications
+    notifications: (query) => get('/mail', { action: 'notifications', ...query }),
+    markNotificationsRead: (id) => post('/mail', id ? { id } : {}, { action: 'notifications-read' }),
+    notificationsCount: () => get('/mail', { action: 'notifications-count' }),
+
+    // Job queue (managers/admins)
+    runJobs: () => post('/mail', undefined, { action: 'run-jobs' }),
   },
 
   // ── Admin ──────────────────────────────────────────────────────────────

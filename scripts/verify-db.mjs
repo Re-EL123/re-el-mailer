@@ -624,6 +624,133 @@ await client.query(`update public.mailboxes set storage_used_bytes = $1 where id
     const latency = await poolModule.ping();
     ok(latency >= 0 ? `pool.ping round-trip ${latency} ms` : 'pool.ping failed');
 
+    // ── automation query layer ───────────────────────────────────────────────
+    // The whole automation feature (rules, templates, notes, the job queue,
+    // webhooks, notifications, campaigns) is new SQL; exercise the repository
+    // functions against the real database, not just the migration.
+    console.log('\n\x1b[1m8. Automation query layer\x1b[0m');
+    const automation = await import('../packages/db/automation.js');
+
+    // Rules
+    const rule = await automation.createRule({
+      mailboxId: 'mbx_main',
+      name: 'Invoices to finance',
+      conditions: { match: 'all', conditions: [{ field: 'subject', operator: 'contains', value: 'invoice' }] },
+      actions: [{ type: 'label', labelId: null }, { type: 'mark_read' }],
+      direction: 'inbound',
+      runOrder: 10,
+    });
+    ok(rule?.id ? `createRule stored ${rule.id} with jsonb conditions` : 'createRule failed');
+    const rulesList = await automation.listRules('mbx_main');
+    ok(rulesList.length === 1 ? 'listRules returns the rule' : `listRules returned ${rulesList.length}`);
+    const activeInbound = await automation.activeRulesFor('mbx_main', 'inbound');
+    ok(activeInbound.length === 1 ? 'activeRulesFor(inbound) includes the rule' : 'activeRulesFor missed the rule');
+    const inactive = await automation.updateRule(rule.id, 'mbx_main', { isActive: false });
+    ok(inactive?.is_active === false ? 'updateRule toggles is_active' : 'updateRule did not apply the patch');
+    ok(
+      (await automation.activeRulesFor('mbx_main', 'inbound')).length === 0
+        ? 'activeRulesFor excludes the disabled rule'
+        : 'activeRulesFor returned a disabled rule',
+    );
+    const run1 = await automation.recordRuleRun(rule.id, seeded.id, [{ type: 'mark_read' }]);
+    const run2 = await automation.recordRuleRun(rule.id, seeded.id, [{ type: 'mark_read' }]);
+    ok(run1?.id && run2 === null ? 'recordRuleRun is idempotent per (rule, message)' : 'recordRuleRun was not idempotent');
+    const runs = await automation.listRuleRuns(rule.id, { limit: 5 });
+    ok(runs.length === 1 ? 'listRuleRuns returns the single recorded run' : `listRuleRuns returned ${runs.length}`);
+    await automation.updateRule(rule.id, 'mbx_main', { isActive: true });
+
+    // Templates
+    const template = await automation.createTemplate({
+      mailboxId: 'mbx_main',
+      name: 'Thank You Reply',
+      subject: 'Thanks!',
+      bodyText: 'Thanks for reaching out.',
+    });
+    ok(template?.slug === 'thank-you-reply' ? `createTemplate slugs the name (${template.slug})` : `unexpected slug: ${template?.slug}`);
+    const bySlug = await automation.templateBySlug('mbx_main', 'thank-you-reply');
+    ok(bySlug?.id === template.id ? 'templateBySlug resolves by slug' : 'templateBySlug failed');
+    const renamed = await automation.updateTemplate(template.id, 'mbx_main', { subject: 'Thank you!' });
+    ok(renamed?.subject === 'Thank you!' ? 'updateTemplate patches a field' : 'updateTemplate failed');
+
+    // Notes
+    await automation.createNote({ messageId: seeded.id, mailboxId: 'mbx_main', authorId: 'usr_admin', body: 'Called the client.' });
+    const notes = await automation.listNotes(seeded.id, 'mbx_main');
+    ok(notes.length === 1 ? 'createNote + listNotes round-trip' : `notes returned ${notes.length}`);
+    await automation.deleteNote(notes[0].id, 'mbx_main');
+    ok((await automation.listNotes(seeded.id, 'mbx_main')).length === 0 ? 'deleteNote removes the note' : 'deleteNote failed');
+
+    // Jobs: enqueue is idempotent on dedupe_key, then claim/complete.
+    const job1 = await automation.enqueueJob({ kind: 'snooze', mailboxId: 'mbx_main', payload: { messageId: seeded.id }, dedupeKey: 'verify:snooze' });
+    const job2 = await automation.enqueueJob({ kind: 'snooze', mailboxId: 'mbx_main', payload: { messageId: seeded.id }, dedupeKey: 'verify:snooze' });
+    ok(job1?.id && job2?.id === job1.id ? 'enqueueJob dedupes on dedupe_key returning the same id' : 'enqueueJob did not dedupe');
+    const claimed = await automation.claimDueJobs({ limit: 5, workerId: 'verify' });
+    ok(claimed.length >= 1 && claimed[0].status === 'running' ? 'claimDueJobs flips a due job to running' : 'claimDueJobs claimed nothing');
+    await automation.completeJob(job1.id, { ok: true });
+    const done = await automation.listJobs({ mailboxId: 'mbx_main', status: 'done', limit: 5 });
+    ok(done.some((job) => job.id === job1.id) ? 'completeJob marks the job done' : 'completeJob failed');
+
+    // Webhooks: the signing secret is returned on read for dispatch but never in list views.
+    const hook = await automation.createWebhookEndpoint({
+      mailboxId: 'mbx_main',
+      url: 'https://example.com/hook',
+      secret: 'super-secret-signing-key',
+      events: ['message.received'],
+    });
+    const hookList = await automation.listWebhookEndpoints('mbx_main');
+    ok(hookList.length === 1 && hookList[0].secret === undefined ? 'listWebhookEndpoints hides the secret' : 'listWebhookEndpoints leaked the secret');
+    const hookFull = await automation.getWebhookEndpoint(hook.id, 'mbx_main');
+    ok(hookFull?.secret ? 'getWebhookEndpoint returns the secret for dispatch' : 'getWebhookEndpoint lost the secret');
+    const subscribed = await automation.activeEndpointsFor('mbx_main', 'message.received');
+    ok(subscribed.length === 1 ? 'activeEndpointsFor matches a subscribed event' : 'activeEndpointsFor missed the endpoint');
+    const unsubscribed = await automation.activeEndpointsFor('mbx_main', 'campaign.completed');
+    ok(unsubscribed.length === 0 ? 'activeEndpointsFor ignores an unsubscribed event' : 'activeEndpointsFor over-matched');
+    await automation.recordWebhookDelivery({ endpointId: hook.id, event: 'message.received', payload: { a: 1 }, responseStatus: 200, delivered: true });
+    const deliveries = await automation.listWebhookDeliveries(hook.id, { limit: 5 });
+    ok(deliveries.length === 1 ? 'recordWebhookDelivery + listWebhookDeliveries round-trip' : 'webhook delivery not recorded');
+
+    // Notifications
+    await automation.createNotification({ userId: 'usr_admin', mailboxId: 'mbx_main', kind: 'assignment', title: 'Assigned' });
+    const unreadBefore = await automation.countUnreadNotifications('usr_admin');
+    ok(unreadBefore === 1 ? 'countUnreadNotifications counts the new notification' : `unread count was ${unreadBefore}`);
+    await automation.markAllNotificationsRead('usr_admin');
+    ok((await automation.countUnreadNotifications('usr_admin')) === 0 ? 'markAllNotificationsRead clears unread' : 'markAllNotificationsRead failed');
+
+    // Campaigns: recipient de-duplication, claiming and count refresh.
+    const campaign = await automation.createCampaign({
+      mailboxId: 'mbx_main',
+      name: 'September newsletter',
+      subject: 'Hello',
+      bodyHtml: '<p>Hi</p>',
+      bodyText: 'Hi',
+    });
+    ok(campaign?.status === 'draft' ? 'createCampaign defaults to draft' : `unexpected campaign status: ${campaign?.status}`);
+    const added = await automation.addCampaignRecipients(campaign.id, [
+      { email: 'one@example.com' },
+      { email: 'ONE@example.com' },
+      { email: 'two@example.com' },
+    ]);
+    ok(added === 2 ? 'addCampaignRecipients de-duplicates case-insensitively' : `added ${added} recipients (expected 2)`);
+    const claimedRecipients = await automation.claimCampaignRecipients(campaign.id, 10);
+    ok(claimedRecipients.length === 2 ? 'claimCampaignRecipients claims the pending batch' : `claimed ${claimedRecipients.length}`);
+    await automation.markRecipientSent(claimedRecipients[0].id, sentOne.id);
+    await automation.markRecipientFailed(claimedRecipients[1].id, 'bounced');
+    const refreshed = await automation.refreshCampaignCounts(campaign.id);
+    ok(
+      refreshed.sent_count === 1 && refreshed.failed_count === 1
+        ? 'refreshCampaignCounts reports sent=1 failed=1'
+        : `counts were sent=${refreshed.sent_count} failed=${refreshed.failed_count}`,
+    );
+
+    await automation.deleteCampaign(campaign.id, 'mbx_main');
+    await automation.deleteWebhookEndpoint(hook.id, 'mbx_main');
+    await automation.deleteTemplate(template.id, 'mbx_main');
+    await automation.deleteRule(rule.id, 'mbx_main');
+    ok(
+      (await automation.listRules('mbx_main')).length === 0
+        ? 'automation deletes remove their rows'
+        : 'an automation row survived its delete',
+    );
+
     await poolModule.closePool();
     delete process.env.DATABASE_URL;
 

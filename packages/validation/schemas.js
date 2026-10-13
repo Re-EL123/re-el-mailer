@@ -328,7 +328,182 @@ export const settingsUpdateSchema = z.object({
 });
 
 export const maintenanceSchema = z.object({
-  task: z.enum(['purge', 'sessions', 'rate-limits', 'audit', 'all']).optional().default('all'),
+  task: z
+    .enum(['purge', 'sessions', 'rate-limits', 'audit', 'jobs', 'campaigns', 'automation', 'all'])
+    .optional()
+    .default('all'),
   trashDays: z.number().int().min(1).max(365).optional(),
   spamDays: z.number().int().min(1).max(365).optional(),
+});
+
+// ─── Automation ──────────────────────────────────────────────────────────────
+
+export const ruleConditionSchema = z.object({
+  field: z.string().trim().min(1).max(40),
+  operator: z
+    .enum([
+      'equals', 'is', 'not_equals', 'is_not', 'contains', 'not_contains', 'starts_with',
+      'ends_with', 'matches', 'gt', 'lt', 'is_empty', 'is_not_empty', 'is_true', 'is_false',
+    ])
+    .default('contains'),
+  value: z.union([z.string().max(2000), z.number(), z.boolean(), z.null()]).optional(),
+});
+
+export const ruleConditionsSchema = z.object({
+  match: z.enum(['all', 'any']).optional().default('all'),
+  conditions: z.array(ruleConditionSchema).max(25).default([]),
+});
+
+export const ruleActionSchema = z.object({
+  type: z
+    .enum([
+      'move', 'folder', 'archive', 'trash', 'star', 'unstar', 'mark_read', 'mark_unread',
+      'label', 'assign', 'snooze', 'follow_up', 'notify', 'webhook', 'auto_reply',
+    ]),
+  folder: folderSchema.optional(),
+  labelId: idSchema.optional(),
+  userId: idSchema.nullish(),
+  minutes: z.number().int().min(1).max(525_600).optional(),
+  days: z.number().int().min(1).max(365).optional(),
+  title: z.string().trim().max(200).optional(),
+  body: z.string().trim().max(2000).optional(),
+  ruleId: idSchema.optional(),
+});
+
+export const ruleSchema = z.object({
+  id: idSchema.optional(),
+  name: z.string().trim().min(1, 'Give the rule a name.').max(120),
+  description: z.string().trim().max(500).nullish(),
+  isActive: z.boolean().optional().default(true),
+  conditions: ruleConditionsSchema.optional().default({ match: 'all', conditions: [] }),
+  actions: z.array(ruleActionSchema).max(25).optional().default([]),
+  direction: z.enum(['inbound', 'outbound', 'both']).optional().default('inbound'),
+  stopProcessing: z.boolean().optional().default(false),
+  runOrder: z.number().int().min(0).max(1000).optional().default(100),
+  mailboxId: idSchema.nullish(),
+});
+
+export const templateSchema = z.object({
+  id: idSchema.optional(),
+  name: z.string().trim().min(1, 'Give the template a name.').max(120),
+  subject: z.string().trim().max(200).nullish(),
+  bodyHtml: htmlSchema.nullish(),
+  bodyText: textSchema.nullish(),
+  sortOrder: z.number().int().min(0).max(9999).optional().default(0),
+  mailboxId: idSchema.nullish(),
+});
+
+export const noteSchema = z.object({
+  id: idSchema.optional(),
+  messageId: idSchema.optional(),
+  body: z.string().trim().min(1, 'Write something first.').max(10_000),
+  mailboxId: idSchema.nullish(),
+});
+
+export const assignSchema = z.object({
+  ids: z.array(idSchema).min(1).max(200),
+  userId: idSchema.nullish(),
+  mailboxId: idSchema.nullish(),
+});
+
+export const snoozeSchema = z.object({
+  ids: z.array(idSchema).min(1).max(200),
+  until: z.string().datetime({ offset: true }).optional(),
+  minutes: z.number().int().min(1).max(525_600).optional(),
+  mailboxId: idSchema.nullish(),
+});
+
+export const followUpSchema = z.object({
+  ids: z.array(idSchema).min(1).max(200),
+  at: z.string().datetime({ offset: true }).optional(),
+  days: z.number().int().min(1).max(365).optional(),
+  mailboxId: idSchema.nullish(),
+});
+
+export const autoReplySchema = z.object({
+  mailboxId: idSchema.nullish(),
+  enabled: z.boolean().optional(),
+  subject: z.string().trim().max(200).nullish(),
+  body: textSchema.nullish(),
+  start: z.string().datetime({ offset: true }).nullish(),
+  end: z.string().datetime({ offset: true }).nullish(),
+  intervalMinutes: z.number().int().min(1).max(525_600).optional(),
+});
+
+export const webhookEndpointSchema = z.object({
+  id: idSchema.optional(),
+  mailboxId: idSchema.nullish(),
+  url: z.string().trim().url('Enter a valid URL.').max(2048),
+  secret: z.string().trim().min(16, 'Use at least 16 characters.').max(200).optional(),
+  description: z.string().trim().max(200).nullish(),
+  events: z.array(z.string().trim().max(60)).max(25).optional().default([]),
+  isActive: z.boolean().optional().default(true),
+});
+
+export const webhookEndpointUpdateSchema = z.object({
+  id: idSchema,
+  url: z.string().trim().url('Enter a valid URL.').max(2048).optional(),
+  secret: z.string().trim().min(16, 'Use at least 16 characters.').max(200).optional(),
+  description: z.string().trim().max(200).nullish(),
+  events: z.array(z.string().trim().max(60)).max(25).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const campaignRecipientSchema = z.object({
+  email: emailSchema,
+  name: z.string().trim().max(120).nullish(),
+});
+
+export const campaignSchema = z.object({
+  id: idSchema.optional(),
+  mailboxId: idSchema.nullish(),
+  name: z.string().trim().min(1, 'Give the campaign a name.').max(120),
+  subject: z.string().trim().min(1, 'A subject is required.').max(200),
+  bodyHtml: htmlSchema.nullish(),
+  bodyText: textSchema.nullish(),
+  scheduledFor: z.string().datetime({ offset: true }).nullish(),
+  batchSize: z.number().int().min(1).max(500).optional().default(50),
+  recipients: z.array(campaignRecipientSchema).max(2000).optional().default([]),
+});
+
+export const campaignRecipientsSchema = z.object({
+  id: idSchema,
+  recipients: z.array(campaignRecipientSchema).min(1).max(2000),
+});
+
+// Partial update shapes: every field optional so a patch only touches what the
+// client actually sent. Kept separate from the create schemas because Zod's
+// defaults would otherwise be re-applied on every update.
+export const ruleUpdateSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(120).optional(),
+  description: z.string().trim().max(500).nullish(),
+  isActive: z.boolean().optional(),
+  conditions: ruleConditionsSchema.optional(),
+  actions: z.array(ruleActionSchema).max(25).optional(),
+  direction: z.enum(['inbound', 'outbound', 'both']).optional(),
+  stopProcessing: z.boolean().optional(),
+  runOrder: z.number().int().min(0).max(1000).optional(),
+  mailboxId: idSchema.nullish(),
+});
+
+export const templateUpdateSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(120).optional(),
+  subject: z.string().trim().max(200).nullish(),
+  bodyHtml: htmlSchema.nullish(),
+  bodyText: textSchema.nullish(),
+  sortOrder: z.number().int().min(0).max(9999).optional(),
+  mailboxId: idSchema.nullish(),
+});
+
+export const campaignUpdateSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(120).optional(),
+  subject: z.string().trim().min(1).max(200).optional(),
+  bodyHtml: htmlSchema.nullish(),
+  bodyText: textSchema.nullish(),
+  scheduledFor: z.string().datetime({ offset: true }).nullish(),
+  batchSize: z.number().int().min(1).max(500).optional(),
+  mailboxId: idSchema.nullish(),
 });

@@ -119,6 +119,420 @@ async function labelSection(mailboxes) {
   return box;
 }
 
+/**
+ * Build a <select> from [value, label] pairs.
+ */
+function selectOf(options, value) {
+  const select = el('select', {}, ...options.map(([v, label]) => el('option', { value: v, text: label })));
+  if (value != null) select.value = value;
+  return select;
+}
+
+const CONDITION_FIELDS = [
+  ['from', 'From'], ['to', 'To'], ['subject', 'Subject'], ['body', 'Body'],
+  ['has_attachments', 'Has attachments'], ['folder', 'Folder'],
+];
+const CONDITION_OPERATORS = [
+  ['contains', 'contains'], ['not_contains', 'does not contain'], ['equals', 'equals'],
+  ['not_equals', 'is not'], ['starts_with', 'starts with'], ['ends_with', 'ends with'],
+  ['is_empty', 'is empty'], ['is_not_empty', 'is not empty'],
+  ['is_true', 'is true'], ['is_false', 'is false'],
+];
+const RULE_ACTIONS = [
+  ['move', 'Move to folder'], ['label', 'Add label'], ['star', 'Star'], ['mark_read', 'Mark read'],
+  ['mark_unread', 'Mark unread'], ['archive', 'Archive'], ['trash', 'Move to trash'],
+  ['assign', 'Assign to a user'], ['notify', 'Notify mailbox owners'], ['snooze', 'Snooze'],
+  ['auto_reply', 'Send auto-reply'],
+];
+const MOVABLE_FOLDERS = [['inbox', 'Inbox'], ['archive', 'Archive'], ['spam', 'Spam'], ['trash', 'Trash']];
+
+/** An editable summary of one rule's conditions and actions. */
+function ruleSummary(rule) {
+  const conditions = rule.conditions?.conditions || [];
+  const actions = rule.actions || [];
+  const condText = conditions
+    .map((c) => `${c.field} ${String(c.operator || 'contains').replace(/_/g, ' ')}${c.value != null ? ` "${c.value}"` : ''}`)
+    .join(rule.conditions?.match === 'any' ? ' or ' : ' and ') || 'any message';
+  const actionText = actions.map((a) => String(a.type || '').replace(/_/g, ' ')).join(', ') || 'no actions';
+  return `When ${condText}: ${actionText}.`;
+}
+
+/**
+ * Canned responses.
+ *
+ * The composer can insert these; this is where they are written. Only the
+ * plain-text body is edited here — the rich HTML variant is optional and the
+ * composer falls back to wrapping this text, so an operator never has to write
+ * markup by hand to get a usable canned reply.
+ */
+async function templatesCard(mailboxes) {
+  let current = state.activeMailboxId || mailboxes[0].id;
+  const list = el('div', { class: 'setting-rows' });
+  const card = section(
+    'Canned responses',
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Mailbox' }),
+      mailboxPicker(mailboxes, async (id) => { current = id; await refresh(); })),
+    list,
+  );
+
+  const nameInput = el('input', { class: 'field', placeholder: 'Name', maxlength: 120 });
+  const subjectInput = el('input', { class: 'field', placeholder: 'Subject (optional)', maxlength: 200 });
+  const bodyInput = el('textarea', { class: 'field', rows: 2, placeholder: 'Body text' });
+
+  async function add() {
+    if (!nameInput.value.trim()) { toast('Give the response a name.', 'error'); return; }
+    try {
+      await api.automation.createTemplate({
+        name: nameInput.value.trim(),
+        subject: subjectInput.value.trim() || null,
+        bodyText: bodyInput.value,
+      }, current);
+      nameInput.value = '';
+      subjectInput.value = '';
+      bodyInput.value = '';
+      toast('Canned response saved.', 'success');
+      await refresh();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function refresh() {
+    let templates = [];
+    try {
+      templates = (await api.automation.templates(current)).templates || [];
+    } catch (err) {
+      mount(list, el('p', { class: 'muted small', text: err.message }));
+      return;
+    }
+
+    mount(list,
+      ...(templates.length
+        ? templates.map((tpl) => {
+            const name = el('input', { class: 'field', value: tpl.name, 'aria-label': `Name for ${tpl.name}`, maxlength: 120 });
+            const subject = el('input', { class: 'field', value: tpl.subject || '', 'aria-label': `Subject for ${tpl.name}`, maxlength: 200 });
+            const body = el('textarea', { class: 'field', rows: 2, 'aria-label': `Body for ${tpl.name}` });
+            body.value = tpl.bodyText || '';
+            return el('div', { class: 'template-row' },
+              name,
+              subject,
+              body,
+              el('div', { class: 'row-actions' },
+                el('button', { class: 'btn btn-sm btn-primary', text: 'Save', onClick: async () => {
+                  try {
+                    await api.automation.updateTemplate(tpl.id, {
+                      name: name.value.trim(),
+                      subject: subject.value.trim() || null,
+                      bodyText: body.value,
+                    }, current);
+                    toast('Canned response updated.', 'success');
+                    await refresh();
+                  } catch (err) { toast(err.message, 'error'); }
+                } }),
+                el('button', { class: 'btn btn-sm', text: 'Delete', onClick: async () => {
+                  if (!confirm(`Delete the canned response "${tpl.name}"?`)) return;
+                  try {
+                    await api.automation.deleteTemplate(tpl.id, current);
+                    toast('Canned response deleted.', 'success');
+                    await refresh();
+                  } catch (err) { toast(err.message, 'error'); }
+                } }),
+              ),
+            );
+          })
+        : [el('p', { class: 'muted small', text: 'No canned responses yet.' })]),
+    );
+  }
+
+  card.append(
+    el('div', { class: 'setting-grid' },
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'New response' }), nameInput),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Subject' }), subjectInput),
+    ),
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Body' }), bodyInput),
+    el('button', { class: 'btn btn-primary', text: 'Add canned response', onClick: add }),
+  );
+
+  await refresh();
+  return card;
+}
+
+/** Out-of-office auto-reply, stored on the mailbox row. */
+async function autoReplyCard(mailboxes) {
+  let current = state.activeMailboxId || mailboxes[0].id;
+  const status = el('p', { class: 'setting-note' });
+  const enabled = el('input', { type: 'checkbox', class: 'toggle', 'aria-label': 'Enable out-of-office' });
+  const subject = el('input', { class: 'field', placeholder: 'Out of office', maxlength: 200 });
+  const body = el('textarea', { class: 'field', rows: 4, placeholder: 'I am away and will reply when I return.' });
+  const interval = el('input', { type: 'number', class: 'field', min: '1', value: '1440' });
+  const start = el('input', { type: 'datetime-local', class: 'field' });
+  const end = el('input', { type: 'datetime-local', class: 'field' });
+
+  function fill(data) {
+    enabled.checked = Boolean(data?.enabled);
+    subject.value = data?.subject || '';
+    body.value = data?.body || '';
+    interval.value = String(data?.intervalMinutes ?? 1440);
+    start.value = data?.start ? String(data.start).slice(0, 16) : '';
+    end.value = data?.end ? String(data.end).slice(0, 16) : '';
+    status.textContent = enabled.checked ? 'Auto-reply is on.' : 'Auto-reply is off.';
+  }
+
+  async function load() {
+    try {
+      fill((await api.automation.autoReply(current)).autoReply);
+    } catch (err) {
+      status.textContent = err.message;
+    }
+  }
+
+  const save = el('button', { class: 'btn btn-primary', text: 'Save auto-reply', onClick: async () => {
+    save.disabled = true;
+    try {
+      await api.automation.setAutoReply({
+        enabled: enabled.checked,
+        subject: subject.value.trim() || null,
+        body: body.value,
+        intervalMinutes: Number(interval.value) || 1440,
+        start: start.value ? new Date(start.value).toISOString() : null,
+        end: end.value ? new Date(end.value).toISOString() : null,
+      }, current);
+      toast('Auto-reply saved.', 'success');
+      await load();
+    } catch (err) { toast(err.message, 'error'); } finally { save.disabled = false; }
+  } });
+
+  const card = section(
+    'Out of office',
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Mailbox' }),
+      mailboxPicker(mailboxes, async (id) => { current = id; await load(); })),
+    el('label', { class: 'field field-inline' }, enabled, el('span', { text: 'Send an automatic reply to new mail' })),
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Subject' }), subject),
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Body' }), body),
+    el('div', { class: 'setting-grid' },
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Reply at most every (minutes)' }), interval),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Start (optional)' }), start),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'End (optional)' }), end),
+    ),
+    el('p', { class: 'setting-note', text: 'Each correspondent is replied to at most once per interval, which is what keeps an auto-reply from looping.' }),
+    save,
+    status,
+  );
+
+  await load();
+  return card;
+}
+
+/** Inbound rules: list with enable/delete, plus a single-condition builder. */
+async function rulesCard(mailboxes) {
+  let current = state.activeMailboxId || mailboxes[0].id;
+  const list = el('div', { class: 'setting-rows' });
+  const card = section(
+    'Rules',
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Mailbox' }),
+      mailboxPicker(mailboxes, async (id) => { current = id; await refresh(); })),
+    list,
+  );
+
+  const name = el('input', { class: 'field', placeholder: 'Rule name', maxlength: 120 });
+  const field = selectOf(CONDITION_FIELDS, 'from');
+  const operator = selectOf(CONDITION_OPERATORS, 'contains');
+  const value = el('input', { class: 'field', placeholder: 'Value' });
+  const actionType = selectOf(RULE_ACTIONS, 'move');
+  const actionTarget = el('input', { class: 'field', placeholder: 'Folder name' });
+
+  const targetFor = () => {
+    if (actionType.value === 'move') actionTarget.placeholder = 'Folder (e.g. archive)';
+    else if (actionType.value === 'label') actionTarget.placeholder = 'Label id';
+    else if (actionType.value === 'assign') actionTarget.placeholder = 'User id';
+    else if (actionType.value === 'notify') actionTarget.placeholder = 'Notification title';
+    else if (actionType.value === 'snooze') actionTarget.placeholder = 'Minutes';
+    else actionTarget.placeholder = 'Not needed';
+  };
+  targetFor();
+  actionType.addEventListener('change', targetFor);
+
+  function buildAction() {
+    const target = actionTarget.value.trim();
+    switch (actionType.value) {
+      case 'move': return { type: 'move', folder: target || 'inbox' };
+      case 'label': return { type: 'label', labelId: target || undefined };
+      case 'assign': return { type: 'assign', userId: target || null };
+      case 'notify': return { type: 'notify', title: target || 'Rule matched' };
+      case 'snooze': return { type: 'snooze', minutes: Number(target) || 60 };
+      default: return { type: actionType.value };
+    }
+  }
+
+  async function add() {
+    if (!name.value.trim()) { toast('Give the rule a name.', 'error'); return; }
+    const condition = { field: field.value, operator: operator.value, value: value.value || null };
+    try {
+      await api.automation.createRule({
+        name: name.value.trim(),
+        direction: 'inbound',
+        conditions: { match: 'all', conditions: [condition] },
+        actions: [buildAction()],
+      }, current);
+      name.value = '';
+      value.value = '';
+      actionTarget.value = '';
+      toast('Rule created.', 'success');
+      await refresh();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function refresh() {
+    let rules = [];
+    try {
+      rules = (await api.automation.rules(current)).rules || [];
+    } catch (err) {
+      mount(list, el('p', { class: 'muted small', text: err.message }));
+      return;
+    }
+
+    mount(list,
+      ...(rules.length
+        ? rules.map((rule) => {
+            const toggle = el('input', { type: 'checkbox', class: 'toggle', checked: rule.isActive, 'aria-label': `Enable ${rule.name}` });
+            toggle.addEventListener('change', async () => {
+              try {
+                await api.automation.updateRule(rule.id, { isActive: toggle.checked }, current);
+                toast(toggle.checked ? 'Rule enabled.' : 'Rule paused.', 'success');
+              } catch (err) { toast(err.message, 'error'); toggle.checked = !toggle.checked; }
+            });
+            return el('div', { class: 'rule-row' },
+              toggle,
+              el('div', { class: 'rule-body' },
+                el('span', { class: 'rule-name', text: rule.name }),
+                el('span', { class: 'muted small', text: ruleSummary(rule) }),
+              ),
+              el('button', { class: 'btn btn-sm', text: 'Delete', onClick: async () => {
+                if (!confirm(`Delete the rule "${rule.name}"?`)) return;
+                try {
+                  await api.automation.deleteRule(rule.id, current);
+                  toast('Rule deleted.', 'success');
+                  await refresh();
+                } catch (err) { toast(err.message, 'error'); }
+              } }),
+            );
+          })
+        : [el('p', { class: 'muted small', text: 'No rules yet.' })]),
+    );
+  }
+
+  card.append(
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'New rule' }), name),
+    el('div', { class: 'setting-grid' },
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'When' }), field),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Operator' }), operator),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Value' }), value),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Then' }), actionType),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Target' }), actionTarget),
+    ),
+    el('button', { class: 'btn btn-primary', text: 'Add rule', onClick: add }),
+  );
+
+  await refresh();
+  return card;
+}
+
+/** Outbound webhook endpoints. */
+async function webhooksCard(mailboxes) {
+  let current = state.activeMailboxId || mailboxes[0].id;
+  const list = el('div', { class: 'setting-rows' });
+  const secretNote = el('p', { class: 'setting-note' });
+  const card = section(
+    'Webhooks',
+    el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Mailbox' }),
+      mailboxPicker(mailboxes, async (id) => { current = id; await refresh(); })),
+    list,
+    secretNote,
+  );
+
+  const url = el('input', { class: 'field', type: 'url', placeholder: 'https://example.com/hook', maxlength: 2048 });
+  const description = el('input', { class: 'field', placeholder: 'Description (optional)', maxlength: 200 });
+  const events = el('input', { class: 'field', placeholder: 'message.received, message.sent' });
+
+  async function add() {
+    if (!url.value.trim()) { toast('Enter a webhook URL.', 'error'); return; }
+    try {
+      const data = await api.automation.createWebhook({
+        url: url.value.trim(),
+        description: description.value.trim() || null,
+        events: events.value.split(',').map((e) => e.trim()).filter(Boolean),
+      }, current);
+      secretNote.textContent = data.secret
+        ? `Signing secret (shown once, store it now): ${data.secret}`
+        : '';
+      url.value = '';
+      description.value = '';
+      events.value = '';
+      toast('Webhook created.', 'success');
+      await refresh();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function refresh() {
+    let hooks = [];
+    try {
+      hooks = (await api.automation.webhooks(current)).webhooks || [];
+    } catch (err) {
+      mount(list, el('p', { class: 'muted small', text: err.message }));
+      return;
+    }
+
+    mount(list,
+      ...(hooks.length
+        ? hooks.map((hook) => {
+            const toggle = el('input', { type: 'checkbox', class: 'toggle', checked: hook.isActive, 'aria-label': `Enable webhook ${hook.url}` });
+            toggle.addEventListener('change', async () => {
+              try {
+                await api.automation.updateWebhook(hook.id, { isActive: toggle.checked }, current);
+                toast(toggle.checked ? 'Webhook enabled.' : 'Webhook paused.', 'success');
+              } catch (err) { toast(err.message, 'error'); toggle.checked = !toggle.checked; }
+            });
+            return el('div', { class: 'rule-row' },
+              toggle,
+              el('div', { class: 'rule-body' },
+                el('span', { class: 'rule-name', text: hook.url }),
+                el('span', { class: 'muted small', text: (hook.events && hook.events.length ? hook.events.join(', ') : 'all events') + (hook.description ? ` — ${hook.description}` : '') }),
+              ),
+              el('button', { class: 'btn btn-sm', text: 'Delete', onClick: async () => {
+                if (!confirm(`Delete the webhook for ${hook.url}?`)) return;
+                try {
+                  await api.automation.deleteWebhook(hook.id, current);
+                  toast('Webhook deleted.', 'success');
+                  await refresh();
+                } catch (err) { toast(err.message, 'error'); }
+              } }),
+            );
+          })
+        : [el('p', { class: 'muted small', text: 'No webhooks yet.' })]),
+    );
+  }
+
+  card.append(
+    el('div', { class: 'setting-grid' },
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'URL' }), url),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Events' }), events),
+      el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Description' }), description),
+    ),
+    el('button', { class: 'btn btn-primary', text: 'Add webhook', onClick: add }),
+  );
+
+  await refresh();
+  return card;
+}
+
+/** The automation cards, in the order an operator usually reaches for them. */
+async function automationSections(mailboxes) {
+  return [
+    await templatesCard(mailboxes),
+    await autoReplyCard(mailboxes),
+    await rulesCard(mailboxes),
+    await webhooksCard(mailboxes),
+  ];
+}
+
 export async function renderSettings(container) {
   const app = el('div', { class: 'settings' });
 
@@ -197,6 +611,11 @@ export async function renderSettings(container) {
   // ── Labels ──
   if (mailboxes.length) {
     app.append(await labelSection(mailboxes));
+  }
+
+  // ── Automation ──
+  if (mailboxes.length) {
+    for (const card of await automationSections(mailboxes)) app.append(card);
   }
 
   // ── Security ──

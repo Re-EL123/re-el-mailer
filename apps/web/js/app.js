@@ -30,6 +30,7 @@ import { installShortcuts, pushShortcuts, toggleShortcutHelp } from './keys.js';
 import { renderMailList } from './views/mail-list.js';
 import { renderMessage } from './views/message.js';
 import { renderCompose } from './views/compose.js';
+import { renderCampaigns } from './views/campaigns.js';
 import { renderSettings } from './views/settings.js';
 import { renderAdmin } from './views/admin.js';
 
@@ -37,6 +38,40 @@ const PUBLIC_ROUTES = new Set(['', 'login', 'forgot', 'reset', 'change-password'
 
 let viewRoot = null;
 let shellNode = null;
+
+// Closes the currently-open notification panel, if any. A single pair of
+// document listeners (below) drives every panel rather than each bell adding its
+// own, so signing in and out repeatedly never stacks up listeners.
+let openNotifications = null;
+let notificationsTimer = null;
+
+function stopNotificationsPolling() {
+  clearInterval(notificationsTimer);
+  notificationsTimer = null;
+  openNotifications = null;
+}
+
+document.addEventListener('click', (event) => {
+  if (openNotifications && !event.target?.closest?.('.notif-wrap')) openNotifications();
+});
+document.addEventListener('keydown', (event) => {
+  if (openNotifications && event.key === 'Escape') openNotifications();
+});
+
+/** Short relative time for the notification list. */
+function formatWhen(iso) {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '';
+  const minutes = Math.round((Date.now() - then) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
 
 /* ── Shell ─────────────────────────────────────────────────────────────── */
 
@@ -51,6 +86,144 @@ function mailboxSelect() {
     navigate('inbox');
   });
   return select;
+}
+
+/**
+ * The notifications bell in the top bar.
+ *
+ * The unread count is polled rather than pushed: the backend records
+ * notifications during the inbound webhook and the cron tick, and there is no
+ * socket in this app, so a periodic poll is the honest way to surface them.
+ * Opening the panel always refetches, so the list is never stale even between
+ * polls.
+ */
+function notificationBell() {
+  const badge = el('span', { class: 'notif-badge', hidden: true });
+  const button = el(
+    'button',
+    {
+      class: 'icon-btn notif-btn',
+      type: 'button',
+      title: 'Notifications',
+      'aria-label': 'Notifications',
+      'aria-haspopup': 'true',
+      'aria-expanded': 'false',
+    },
+    icon('bell'),
+    badge,
+  );
+  const panel = el('div', { class: 'notif-panel', role: 'menu', hidden: true });
+  const wrap = el('div', { class: 'notif-wrap' }, button, panel);
+
+  let isOpen = false;
+
+  function setBadge(count) {
+    const unread = Number(count) || 0;
+    badge.hidden = unread <= 0;
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+    button.setAttribute('aria-label', unread > 0 ? `Notifications (${unread} unread)` : 'Notifications');
+  }
+
+  async function refreshCount() {
+    try {
+      const data = await api.automation.notificationsCount();
+      setBadge(data?.unread);
+    } catch {
+      /* a poll that fails is not worth reporting: it retries on the next tick */
+    }
+  }
+
+  async function renderPanel() {
+    mount(panel, el('div', { class: 'notif-empty muted', text: 'Loading…' }));
+    let items = [];
+    try {
+      const data = await api.automation.notifications({ limit: 20 });
+      items = data?.notifications || [];
+      setBadge(data?.unread);
+    } catch (err) {
+      mount(panel, el('div', { class: 'notif-empty muted', text: err.message }));
+      return;
+    }
+
+    if (items.length === 0) {
+      mount(panel, el('div', { class: 'notif-empty muted', text: 'You are all caught up.' }));
+      return;
+    }
+
+    mount(
+      panel,
+      el(
+        'div',
+        { class: 'notif-head' },
+        el('strong', { text: 'Notifications' }),
+        el('button', {
+          class: 'link-btn',
+          type: 'button',
+          text: 'Mark all read',
+          onClick: async () => {
+            try {
+              await api.automation.markNotificationsRead();
+            } catch {
+              /* ignore */
+            }
+            setBadge(0);
+            renderPanel();
+          },
+        }),
+      ),
+      ...items.map((note) =>
+        el(
+          'button',
+          {
+            class: `notif-item${note.isRead ? '' : ' unread'}`,
+            type: 'button',
+            role: 'menuitem',
+            onClick: async () => {
+              if (!note.isRead) {
+                try {
+                  await api.automation.markNotificationsRead(note.id);
+                } catch {
+                  /* ignore */
+                }
+              }
+              closePanel();
+              if (note.url) navigate(String(note.url).replace(/^#?\/?/, ''));
+              else if (note.entityType === 'message' && note.entityId) {
+                navigate(`message/${note.entityId}?mailbox=${state.activeMailboxId}`);
+              }
+              refreshCount();
+            },
+          },
+          el('span', { class: 'notif-title', text: note.title }),
+          note.body ? el('span', { class: 'notif-body muted small', text: note.body }) : null,
+          el('span', { class: 'notif-time muted small', text: formatWhen(note.createdAt) }),
+        ),
+      ),
+    );
+  }
+
+  function closePanel() {
+    isOpen = false;
+    panel.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+    if (openNotifications === closePanel) openNotifications = null;
+  }
+
+  button.addEventListener('click', () => {
+    isOpen = !isOpen;
+    panel.hidden = !isOpen;
+    button.setAttribute('aria-expanded', String(isOpen));
+    if (isOpen) {
+      openNotifications = closePanel;
+      renderPanel();
+    } else {
+      closePanel();
+    }
+  });
+
+  refreshCount();
+  notificationsTimer = setInterval(refreshCount, 60_000);
+  return wrap;
 }
 
 function buildShell() {
@@ -101,6 +274,8 @@ function buildShell() {
       mailboxSelect(),
       el('div', { class: 'topbar-right' },
         el('a', { class: 'icon-btn', href: '#/settings', title: 'Settings', 'aria-label': 'Settings' }, icon('settings')),
+        el('a', { class: 'icon-btn', href: '#/campaigns', title: 'Campaigns', 'aria-label': 'Campaigns' }, icon('send')),
+        notificationBell(),
         themeToggle(),
         isAdmin() ? el('a', { class: 'icon-btn', href: '#/admin', title: 'Admin', 'aria-label': 'Admin console' }, icon('wrench')) : null,
         userMenu,
@@ -127,6 +302,7 @@ async function signOut() {
 function enterPublic() {
   document.body.dataset.mode = 'public';
   shellNode = null;
+  stopNotificationsPolling();
   const root = document.getElementById('root');
   mount(
     root,
@@ -149,6 +325,7 @@ function enterPublic() {
  */
 function enterShell() {
   document.body.dataset.mode = 'app';
+  stopNotificationsPolling();
   mount(document.getElementById('root'), buildShell());
   setRouterContainer(viewRoot);
   loadSettings().catch(() => {});
@@ -282,6 +459,7 @@ route('label', guard((c, ctx) => renderMailList(c, { params: ['label'], query: {
 route('search', guard((c, ctx) => renderMailList(c, { params: ['search'], query: ctx.query })));
 route('message', guard((c, ctx) => renderMessage(c, ctx)));
 route('compose', guard((c, ctx) => renderCompose(c, ctx)));
+route('campaigns', guard((c) => renderCampaigns(c)));
 route('settings', guard((c) => renderSettings(c)));
 route('admin', guard((c) => {
   if (!isAdmin()) {

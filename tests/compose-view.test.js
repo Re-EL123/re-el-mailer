@@ -33,6 +33,9 @@ vi.mock('../apps/web/js/api.js', () => ({
       suggest: vi.fn(async () => ({ suggestions: [] })),
       send: vi.fn(async () => ({ message: { id: 'msg_1' } })),
     },
+    automation: {
+      templates: vi.fn(async () => ({ templates: [] })),
+    },
   },
 }));
 
@@ -126,6 +129,8 @@ beforeEach(() => {
   api.mail.saveDraft.mockClear();
   api.mail.get.mockClear();
   api.send.suggest.mockClear();
+  api.automation.templates.mockClear();
+  api.automation.templates.mockResolvedValue({ templates: [] });
 });
 
 describe('the plain-text fallback', () => {
@@ -448,6 +453,85 @@ describe('resuming a draft', () => {
     // A plain message is read-only; it must not become an editable draft.
     expect(container.querySelector('.compose-title').textContent).toBe('New message');
     expect(container.querySelector('.compose-recipients').value).toBe('');
+  });
+});
+
+describe('canned responses', () => {
+  const templates = [
+    { id: 'tpl_1', name: 'Greeting', subject: 'Hello there', bodyText: 'Hi, thanks for reaching out.', bodyHtml: '<p>Hi, thanks for reaching out.</p>' },
+    { id: 'tpl_2', name: 'Sign-off', subject: null, bodyText: 'Kind regards,\nThe team' },
+  ];
+
+  const openPicker = async (container) => {
+    const button = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Templates');
+    button.click();
+    await waitFor('.template-option', document.body);
+    return document.body;
+  };
+
+  it('lists the mailbox templates when the button is pressed', async () => {
+    api.automation.templates.mockResolvedValueOnce({ templates });
+    const container = host();
+    await renderCompose(container, { query: { mailbox: MB } });
+
+    const body = await openPicker(container);
+    expect(api.automation.templates).toHaveBeenCalledWith(MB);
+    expect(body.querySelectorAll('.template-option')).toHaveLength(2);
+    expect(body.querySelector('.template-option').textContent).toContain('Greeting');
+  });
+
+  it('fills the subject and body from the chosen template', async () => {
+    api.automation.templates.mockResolvedValueOnce({ templates });
+    const container = host();
+    await renderCompose(container, { query: { mailbox: MB } });
+
+    const body = await openPicker(container);
+    body.querySelectorAll('.template-option')[0].click();
+
+    expect(container.querySelector('.compose-subject').value).toBe('Hello there');
+
+    container.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    await vi.waitFor(() => expect(api.send.send).toHaveBeenCalled());
+    expect(api.send.send.mock.calls[0][0].text).toContain('thanks for reaching out');
+  });
+
+  it('never overwrites a subject the user already typed', async () => {
+    api.automation.templates.mockResolvedValueOnce({ templates });
+    const container = host();
+    await renderCompose(container, { query: { mailbox: MB } });
+
+    container.querySelector('.compose-subject').value = 'My own subject';
+    const body = await openPicker(container);
+    body.querySelectorAll('.template-option')[0].click();
+
+    expect(container.querySelector('.compose-subject').value).toBe('My own subject');
+  });
+
+  it('explains how to add templates when there are none', async () => {
+    const container = host();
+    await renderCompose(container, { query: { mailbox: MB } });
+
+    const button = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Templates');
+    button.click();
+    await waitFor('.notif-empty, .muted', document.body);
+    expect(document.body.textContent).toContain('No canned responses yet');
+  });
+
+  it('inserts into the plain-text fallback when the editor is unavailable', async () => {
+    editorShouldFail = true;
+    api.automation.templates.mockResolvedValueOnce({ templates });
+    const container = host();
+    await renderCompose(container, { query: { mailbox: MB } });
+
+    const area = container.querySelector('textarea.compose-body');
+    area.value = 'Existing text';
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+
+    const body = await openPicker(container);
+    body.querySelectorAll('.template-option')[1].click();
+
+    expect(area.value).toContain('Existing text');
+    expect(area.value).toContain('Kind regards');
   });
 });
 

@@ -251,7 +251,21 @@ export async function renderCompose(container, ctx) {
 
   const attachList = el('div', { class: 'attach-list' });
   const fileInput = el('input', { type: 'file', multiple: true, class: 'attach-input' });
-  form.append(el('div', { class: 'compose-attachments' }, el('label', { class: 'btn btn-sm' }, icon('paperclip', { size: 14 }), el('span', { text: 'Attach files' }), fileInput), attachList));
+  const templatesBtn = el(
+    'button',
+    { type: 'button', class: 'btn btn-sm', title: 'Insert a canned response', onClick: () => openTemplates() },
+    icon('quote', { size: 14 }),
+    el('span', { text: 'Templates' }),
+  );
+  form.append(
+    el(
+      'div',
+      { class: 'compose-attachments' },
+      el('label', { class: 'btn btn-sm' }, icon('paperclip', { size: 14 }), el('span', { text: 'Attach files' }), fileInput),
+      templatesBtn,
+      attachList,
+    ),
+  );
 
   const statusNode = el('div', { class: 'compose-status', role: 'status', 'aria-live': 'polite' });
 
@@ -437,6 +451,88 @@ export async function renderCompose(container, ctx) {
     document.body.append(prompt);
     input.focus();
     input.select();
+  }
+
+  /**
+   * Insert a canned response.
+   *
+   * The body is inserted at the caret rather than replacing the document, so a
+   * template dropped into a reply does not wipe the quoted history underneath
+   * it. The subject is only filled when it would otherwise be empty, so pulling
+   * in a template after typing a subject never overwrites it.
+   */
+  function applyTemplate(template) {
+    if (template.subject && !subjectInput.value.trim()) subjectInput.value = template.subject;
+    const text = template.bodyText || '';
+    if (usingRichText && editor) {
+      const html = template.bodyHtml || (text ? `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>` : '');
+      editor.chain().focus().insertContent(html).run();
+      setPlainText(text ? (plainText ? `${plainText}\n\n${text}` : text) : plainText);
+    } else {
+      setPlainText(text ? (plainText ? `${plainText}\n\n${text}` : text) : plainText);
+    }
+  }
+
+  async function openTemplates() {
+    let templates = [];
+    try {
+      const data = await api.automation.templates(mailboxId);
+      templates = data?.templates || [];
+    } catch (err) {
+      toast(err.message, 'error');
+      return;
+    }
+
+    const list = el('div', { class: 'template-list' });
+    if (templates.length === 0) {
+      list.append(el('p', { class: 'muted', text: 'No canned responses yet. Add them under Settings.' }));
+    } else {
+      for (const template of templates) {
+        list.append(
+          el(
+            'button',
+            {
+              type: 'button',
+              class: 'template-option',
+              onClick: () => {
+                applyTemplate(template);
+                close();
+              },
+            },
+            el('span', { class: 'template-name', text: template.name }),
+            template.subject ? el('span', { class: 'muted small', text: template.subject }) : null,
+          ),
+        );
+      }
+    }
+
+    const modal = el(
+      'div',
+      { class: 'modal-backdrop', id: 'template-prompt' },
+      el(
+        'div',
+        { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'template-prompt-title' },
+        el('h3', { class: 'modal-title', id: 'template-prompt-title', text: 'Insert a canned response' }),
+        list,
+        el('div', { class: 'modal-actions' }, el('button', { class: 'btn', type: 'button', text: 'Close', onClick: () => close() })),
+      ),
+    );
+
+    function close() {
+      modal.remove();
+      document.removeEventListener('keydown', onEscape, true);
+    }
+    const onEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      close();
+    };
+
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) close();
+    });
+    document.addEventListener('keydown', onEscape, true);
+    document.body.append(modal);
   }
 
   /**

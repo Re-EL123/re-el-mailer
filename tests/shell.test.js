@@ -30,9 +30,9 @@ function documentShell() {
 }
 
 /** Boot app.js for real: stub the network, fire DOMContentLoaded, wait for boot. */
-async function bootApp() {
+async function bootApp(routes = {}) {
   vi.resetModules();
-  const api = stubApi(defaultRoutes());
+  const api = stubApi(defaultRoutes(routes));
   documentShell();
   await import('../apps/web/js/app.js');
   document.dispatchEvent(new window.Event('DOMContentLoaded'));
@@ -169,5 +169,77 @@ it('ships no emoji in the chrome', async () => {
       .filter((node) => emoji.test(node.textContent));
 
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('notifications bell', () => {
+  const notes = {
+    // Count first: its URL contains the substring the list pattern also matches.
+    'action=notifications-count': { unread: 2 },
+    'action=notifications-read': { read: 2 },
+    'action=notifications': {
+      unread: 2,
+      notifications: [
+        { id: 'ntf_1', kind: 'assigned', title: 'You were assigned a message', body: 'Quarterly numbers', entityType: 'message', entityId: 'msg_1', isRead: false, createdAt: new Date().toISOString() },
+        { id: 'ntf_2', kind: 'mention', title: 'New mention', body: 'Hi', isRead: true, createdAt: new Date().toISOString() },
+      ],
+    },
+  };
+
+  it('shows the unread count on the bell', async () => {
+    await bootApp(notes);
+    const badge = await waitFor('.notif-badge');
+
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toBe('2');
+    expect(document.querySelector('.notif-btn').getAttribute('aria-label')).toContain('2 unread');
+  });
+
+  it('hides the badge when there is nothing unread', async () => {
+    await bootApp({ 'action=notifications-count': { unread: 0 } });
+    await waitFor('.notif-btn');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(document.querySelector('.notif-badge').hidden).toBe(true);
+  });
+
+  it('opens a panel and lists the notifications', async () => {
+    await bootApp(notes);
+    await waitFor('.notif-btn');
+
+    document.querySelector('.notif-btn').click();
+    await waitFor('.notif-item');
+
+    const items = document.querySelectorAll('.notif-item');
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toContain('You were assigned a message');
+    expect(items[0].classList.contains('unread')).toBe(true);
+  });
+
+  it('marks everything read when asked', async () => {
+    let read = false;
+    const api = await bootApp({
+      'action=notifications-count': () => ({ unread: read ? 0 : 2 }),
+      'action=notifications-read': () => {
+        read = true;
+        return { read: 2 };
+      },
+      'action=notifications': () => ({
+        unread: read ? 0 : 2,
+        notifications: [
+          { id: 'ntf_1', kind: 'assigned', title: 'You were assigned a message', isRead: read, createdAt: new Date().toISOString() },
+        ],
+      }),
+    });
+    await waitFor('.notif-btn');
+
+    document.querySelector('.notif-btn').click();
+    await waitFor('.notif-item');
+
+    const markAll = [...document.querySelectorAll('.notif-panel button')].find((b) => b.textContent === 'Mark all read');
+    markAll.click();
+    await vi.waitFor(() => expect(api.calls.some((url) => url.includes('action=notifications-read'))).toBe(true));
+
+    await vi.waitFor(() => expect(document.querySelector('.notif-badge').hidden).toBe(true));
   });
 });

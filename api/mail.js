@@ -70,6 +70,7 @@ import {
   saveDraftSchema,
   updateMessageSchema,
 } from '../packages/validation/schemas.js';
+import { mailboxAutomationActions } from '../packages/http/automation-actions.js';
 
 /**
  * Shape a label row.
@@ -180,6 +181,12 @@ const handlerSpec = {
   },
 
   actions: {
+    // Automation surface (templates, notes, assignment, snooze, reminders,
+    // notifications, rules, out-of-office, outbound webhooks). Declared in a
+    // separate module purely for readability; they share this handler's
+    // session guard and mailbox resolution.
+    ...mailboxAutomationActions,
+
     // ── List a folder ───────────────────────────────────────────────────────
     list: {
       method: 'GET',

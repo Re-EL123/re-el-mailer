@@ -31,6 +31,7 @@ import { ensureDefaultLabels, rememberContacts, resolveInboundRecipient } from '
 import { uploadAttachment } from '../packages/storage/attachments.js';
 import { newId } from '../packages/shared/ids.js';
 import { getReceivedEmail, listReceivedAttachments, suppressContact } from '../packages/mail/resend.js';
+import { dispatchEvent, runAutoReply, runInboundAutomation } from '../packages/mail/automation.js';
 
 /**
  * Read the signed bytes and verify the signature.
@@ -248,6 +249,40 @@ export default createHandler({
           await rememberContacts(mailboxId, [{ name: message.fromName, email: message.fromEmail }]).catch(() => {});
         }
 
+        // Automation runs after the message is safely stored, and never blocks
+        // the acknowledgement: a rule or an auto-reply that fails must not make
+        // the provider retry a delivery that already succeeded. Everything below
+        // is idempotent (rule runs are keyed by rule+message; auto-replies are
+        // rate-limited per sender), so a retried webhook cannot double-fire.
+        const mailboxRow = await queryOne('select * from public.mailboxes where id = $1', [mailboxId]);
+        if (mailboxRow) {
+          const context = { ...message, id: row.id };
+          try {
+            await runInboundAutomation({ mailbox: mailboxRow, message: context });
+          } catch (err) {
+            logger.warn('Inbound rule automation failed', { error: err?.message, message: row.id });
+          }
+          // Only answer real inbox mail: an out-of-office reply to a message
+          // already filed as spam is noise, and replying to spam trains the
+          // wrong habit.
+          if (folder === 'inbox') {
+            await runAutoReply({ mailbox: mailboxRow, message: context }).catch((err) => {
+              logger.warn('Out-of-office reply failed', { error: err?.message, message: row.id });
+            });
+          }
+        }
+
+        await dispatchEvent({
+          event: 'message.received',
+          mailboxId,
+          payload: {
+            messageId: row.id,
+            from: message.fromEmail,
+            subject: message.subject,
+            folder,
+          },
+        }).catch(() => {});
+
         logger.info('Inbound delivered', {
           message: row.id,
           mailbox: mailboxId,
@@ -286,6 +321,14 @@ export default createHandler({
           for (const address of updated.to_emails) {
             await suppressContact(address, event.status === 'complained' ? 'complaint' : 'hard_bounce').catch(() => {});
           }
+        }
+
+        if (updated && event.status === 'bounced') {
+          await dispatchEvent({
+            event: 'message.bounced',
+            mailboxId: updated.mailbox_id ?? null,
+            payload: { messageId: updated.id, reason: event.reason ?? null },
+          }).catch(() => {});
         }
 
         logger.info('Delivery event', {

@@ -20,6 +20,14 @@ const PREFIXES = {
   domain: 'dom',
   route: 'rte',
   thread: 'thr',
+  rule: 'rul',
+  template: 'tpl',
+  note: 'not',
+  job: 'job',
+  webhook: 'whk',
+  notification: 'ntf',
+  campaign: 'cmp',
+  recipient: 'rcp',
 };
 
 /** Cryptographically random, URL-safe token (refresh tokens, reset tokens). */

@@ -431,6 +431,190 @@ function labelControl(msg, mailboxId) {
   return details;
 }
 
+/**
+ * A small dropdown of one-tap actions, built like the label picker so the
+ * reader keeps one interaction pattern. Options are only rendered once the menu
+ * is first opened.
+ */
+function presetPicker({ iconName, label, options }) {
+  const menu = el('div', { class: 'label-menu' });
+  const details = el('details', { class: 'label-picker' },
+    el('summary', { class: 'icon-btn', title: label, 'aria-label': label }, icon(iconName)),
+    menu,
+  );
+  let built = false;
+  details.addEventListener('toggle', () => {
+    if (!details.open || built) return;
+    built = true;
+    mount(menu, ...options.map((option) =>
+      el('button', {
+        type: 'button',
+        class: 'menu-btn',
+        text: option.label,
+        onClick: async () => { details.open = false; await option.run(); },
+      })));
+  });
+  return details;
+}
+
+/** Snooze presets: the message leaves the inbox until the chosen time. */
+function snoozeControl(msg, mailboxId) {
+  const snoozeUntil = async (date) => {
+    try {
+      await api.automation.snooze([msg.id], { until: date.toISOString() }, mailboxId);
+      toast('Message snoozed.', 'success');
+      navigate('inbox');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  const tomorrowMorning = () => {
+    const date = new Date();
+    date.setDate(date.getDate() + 1);
+    date.setHours(9, 0, 0, 0);
+    return date;
+  };
+  return presetPicker({
+    iconName: 'clock',
+    label: 'Snooze',
+    options: [
+      { label: 'Later today (3 hours)', run: () => snoozeUntil(new Date(Date.now() + 3 * 3_600_000)) },
+      { label: 'Tomorrow morning', run: () => snoozeUntil(tomorrowMorning()) },
+      { label: 'Next week', run: () => snoozeUntil(new Date(Date.now() + 7 * 86_400_000)) },
+    ],
+  });
+}
+
+/**
+ * Assign the message to a team member.
+ *
+ * A mailbox belongs to one owner, so the assignee list only carries the caller
+ * unless they are a manager or admin — the endpoint decides that, this control
+ * just renders whatever it returns. The list is fetched lazily because most
+ * opens never assign anything.
+ */
+function assignControl(msg, mailboxId) {
+  const menu = el('div', { class: 'label-menu' }, el('span', { class: 'muted small', text: 'Loading team…' }));
+  const details = el('details', { class: 'label-picker' },
+    el('summary', { class: 'icon-btn', title: 'Assign', 'aria-label': 'Assign this message' }, icon('users')),
+    menu,
+  );
+
+  const assign = async (userId, name) => {
+    try {
+      await api.automation.assign([msg.id], userId, mailboxId);
+      toast(userId ? `Assigned to ${name}.` : 'Message unassigned.', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  let loaded = false;
+  details.addEventListener('toggle', async () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    let users = [];
+    try {
+      users = (await api.automation.assignableUsers(mailboxId)).users || [];
+    } catch (err) {
+      mount(menu, el('span', { class: 'muted small', text: err.message }));
+      return;
+    }
+    if (!users.length) {
+      mount(menu, el('span', { class: 'muted small', text: 'No one to assign.' }));
+      return;
+    }
+    mount(menu,
+      ...users.map((user) => el('button', {
+        type: 'button',
+        class: 'menu-btn',
+        text: user.displayName || user.email,
+        onClick: async () => { details.open = false; await assign(user.id, user.displayName || user.email); },
+      })),
+      el('button', {
+        type: 'button',
+        class: 'menu-btn',
+        text: 'Unassign',
+        onClick: async () => { details.open = false; await assign(null, ''); },
+      }),
+    );
+  });
+
+  return details;
+}
+
+/** Reminder presets: the message stays put, the mailbox is reminded later. */
+function followUpControl(msg, mailboxId) {
+  const remind = async (days) => {
+    try {
+      await api.automation.followUp([msg.id], { days }, mailboxId);
+      toast('Follow-up reminder set.', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  return presetPicker({
+    iconName: 'flag',
+    label: 'Set a follow-up reminder',
+    options: [
+      { label: 'In 1 day', run: () => remind(1) },
+      { label: 'In 3 days', run: () => remind(3) },
+      { label: 'In 1 week', run: () => remind(7) },
+    ],
+  });
+}
+
+/**
+ * Internal notes on a message.
+ *
+ * Notes are the team's own annotation and never leave the mailbox; there is no
+ * outgoing path for them. They are loaded lazily after the body so a slow notes
+ * query never delays the message itself.
+ */
+function notesPanel(msg, mailboxId) {
+  const list = el('div', { class: 'notes-list' }, el('span', { class: 'muted small', text: 'Loading notes…' }));
+  const input = el('textarea', { class: 'field', rows: 2, placeholder: 'Add an internal note…', 'aria-label': 'New internal note' });
+  const addBtn = el('button', { class: 'btn btn-sm btn-primary', text: 'Add note', onClick: add });
+  const panel = el('section', { class: 'notes' },
+    el('h3', { class: 'notes-title', text: 'Internal notes' }),
+    list,
+    el('div', { class: 'note-add' }, input, addBtn),
+  );
+
+  async function add() {
+    const body = input.value.trim();
+    if (!body) return;
+    addBtn.disabled = true;
+    try {
+      await api.automation.createNote({ messageId: msg.id, body }, mailboxId);
+      input.value = '';
+      await refresh();
+    } catch (err) { toast(err.message, 'error'); } finally { addBtn.disabled = false; }
+  }
+
+  async function refresh() {
+    let notes = [];
+    try {
+      notes = (await api.automation.notes(msg.id, mailboxId)).notes || [];
+    } catch (err) {
+      mount(list, el('span', { class: 'muted small', text: err.message }));
+      return;
+    }
+    mount(list, ...(notes.length
+      ? notes.map((note) => el('div', { class: 'note' },
+          el('div', { class: 'note-head' },
+            el('span', { class: 'note-author', text: note.authorEmail || 'Team' }),
+            el('span', { class: 'muted small', text: new Date(note.createdAt).toLocaleString() })),
+          el('div', { class: 'note-body', text: note.body }),
+          el('button', { class: 'btn btn-sm', text: 'Delete', onClick: async () => {
+            if (!confirm('Delete this note?')) return;
+            try {
+              await api.automation.deleteNote(note.id, mailboxId);
+              await refresh();
+            } catch (err) { toast(err.message, 'error'); }
+          } }),
+        ))
+      : [el('span', { class: 'muted small', text: 'No notes yet.' })]));
+  }
+
+  refresh();
+  return panel;
+}
+
 export async function renderMessage(container, ctx) {
   const id = ctx.params[0];
   const mailboxId = ctx.query.mailbox;
@@ -489,6 +673,9 @@ export async function renderMessage(container, ctx) {
           // arrived, a flag changed on another device, or a thread that grew all
           // show as the state you left them in until something navigates.
           el('button', { class: 'icon-btn', title: 'Refresh', 'aria-label': 'Refresh this message', onClick: () => refresh() }, icon('refresh')),
+          assignControl(msg, mailboxId),
+          snoozeControl(msg, mailboxId),
+          followUpControl(msg, mailboxId),
           labelControl(msg, mailboxId),
         ),
         el('h2', { class: 'reader-subject', text: msg.subject || '(no subject)' }),
@@ -578,6 +765,8 @@ export async function renderMessage(container, ctx) {
           ),
         );
       }
+
+      body.append(notesPanel(msg, mailboxId));
     } catch (err) {
       mount(body, el('div', { class: 'empty', text: err.message }));
       popShortcuts();

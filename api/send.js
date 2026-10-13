@@ -49,6 +49,8 @@ import {
 } from '../packages/mail/compose.js';
 import { sendEmail } from '../packages/mail/resend.js';
 import { sendSchema } from '../packages/validation/schemas.js';
+import { campaignActions } from '../packages/http/automation-actions.js';
+import { dispatchEvent } from '../packages/mail/automation.js';
 
 /** Resend will not schedule further out than this. */
 const MAX_SCHEDULE_DAYS = 30;
@@ -174,6 +176,10 @@ export default createHandler({
   },
 
   actions: {
+    // Bulk campaigns are outbound mail, so they live on this function rather
+    // than api/mail.js. Declared in the shared automation actions module.
+    ...campaignActions,
+
     // ── Send ────────────────────────────────────────────────────────────────
     send: {
       method: 'POST',
@@ -349,6 +355,12 @@ export default createHandler({
 
           ctx.auditEntity = { type: 'message', id: row.id };
           ctx.auditData = { recipients: body.to.length + body.cc.length + body.bcc.length, scheduled: isScheduled };
+
+          await dispatchEvent({
+            event: 'message.sent',
+            mailboxId: mailbox.id,
+            payload: { messageId: row.id, resendId, subject: body.subject, scheduled: isScheduled },
+          }).catch(() => {});
 
           return {
             id: row.id,

@@ -21,6 +21,8 @@ import { requireRole, requireSession } from '../packages/auth/guard.js';
 import { deleteAttachments, storageHealth } from '../packages/storage/attachments.js';
 import { storagePathsPendingPurge } from '../packages/db/messages.js';
 import { clearRateLimits, getSetting, pruneSessions } from '../packages/db/system.js';
+import { pruneJobs, pruneNotifications } from '../packages/db/automation.js';
+import { runDueJobs, startDueCampaigns } from '../packages/mail/automation.js';
 
 /** Check that the cron bearer token matches, if one is configured. */
 function assertCronAuthorised(ctx) {
@@ -210,6 +212,35 @@ export default createHandler({
             );
             result.ran.push({ task: 'audit', auditDays, rowsDeleted: trimmed.rowCount });
           }
+        }
+
+        // ── Deferred automation ────────────────────────────────────────────
+        // There is no background worker on a serverless deployment, so the cron
+        // tick is the only place deferred work advances. Campaigns whose time has
+        // arrived are promoted first (which sends their first batch inline), then
+        // the queue is drained: webhook retries, snooze/follow-up wakeups and the
+        // remaining campaign batches.
+        if (task === 'all' || task === 'jobs' || task === 'campaigns') {
+          let campaignsStarted = 0;
+          try {
+            const started = await startDueCampaigns();
+            campaignsStarted = started.started;
+          } catch (err) {
+            logger.warn('Could not start due campaigns', { error: err?.message });
+          }
+          const drained = await runDueJobs({ limit: 50, workerId: 'cron' });
+          result.ran.push({ task: 'jobs', campaignsStarted, ...drained });
+        }
+
+        // Prune finished/failed jobs and read notifications so both stay bounded.
+        if (task === 'all' || task === 'automation') {
+          const jobs = await pruneJobs();
+          const notifications = await pruneNotifications();
+          result.ran.push({
+            task: 'automation',
+            jobsPruned: jobs.rowCount,
+            notificationsPruned: notifications.rowCount,
+          });
         }
 
         logger.info('Maintenance completed', { via, task, steps: result.ran.length });
