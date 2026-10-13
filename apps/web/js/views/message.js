@@ -32,17 +32,24 @@ function visibleTextLength(html) {
  * - http(s) / www / email addresses become real links (mailto: for the last).
  * - An exporter's link suitcase — `display<http://…>`, `name<mailto:…>` — comes
  *   out as one clean link using the explicit href, not the literal text.
+ * - Footnote links — `Go to My Account [1]` with `[1] https://…` at the foot —
+ *   become one link on the label, and the reference list is folded away.
  * - `[cid:token]` inline-image references become placeholders the reader
  *   hydrates into the attachment image once a signed URL is available.
+ * - `**bold**` / `*italic*` are honoured, so emphasis is not shown as asterisks.
  *
  * Everything emitted is built with `el`, so user content is text, never markup.
  */
 const LINK_SOURCE = [
   '([^\\s<]+)\\s*<(https?://[^>\\s]+|mailto:[^>\\s]+|tel:[^>\\s]+|ftp://[^>\\s]+)>', // 1,2: display<href> suitcase
-  '\\[cid:([^\\]]+)\\]',                                                            // 3: inline image token
-  '(https?://[^\\s<>"\')]+)',                                                        // 4: bare url
-  '(www\\.[^\\s<>"\')]+)',                                                           // 5: bare www
-  '([a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,})',                                          // 6: bare email
+  '\\[cid:([^\\]]+)\\]',      // 3: inline image token
+  '\\*\\*([^*]+)\\*\\*',      // 4: **bold**
+  '\\*([^*\\n]+)\\*',         // 5: *italic*
+  '\\[(\\d+)\\]',             // 6: footnote marker
+  '<(https?://[^>\\s]+|mailto:[^>\\s]+)>', // 7: <url> with nothing around it
+  '(https?://[^\\s<>"\')]+)', // 8: bare url
+  '(www\\.[^\\s<>"\')]+)',    // 9: bare www
+  '([a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,})', // 10: bare email
 ];
 const LINK_RE = new RegExp(LINK_SOURCE.join('|'), 'gi');
 
@@ -58,16 +65,100 @@ function trimUrl(url) {
   return url.slice(0, end);
 }
 
-function linkify(text, attachments) {
+const link = (text, href) => el('a', { class: 'autolink', href, target: '_blank', rel: 'noopener', text });
+
+/** Does `text` already hold something the linkifier links on its own? */
+function hasInlineLink(text) {
+  return /(https?:\/\/|www\.|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i.test(text);
+}
+
+/** Is the reference URL an image the reader should show rather than link? */
+function looksLikeImage(url) {
+  return /\.(png|jpe?g|gif|webp|svg|bmp|avif)([?#].*)?$/i.test(url);
+}
+
+/**
+ * Recover the intended target from a footnote definition.
+ *
+ * Some mailers (Odoo among them) emit the *format string* instead of the value:
+ * `…/web/'mailto:%s' % info@x.co.za` or `…/web/'%s' % http://x`. Recover the
+ * value, then accept it only if it is a scheme the reader is willing to link.
+ *
+ * @returns {string | null}
+ */
+function cleanReferenceUrl(value) {
+  let url = String(value || '').trim().replace(/^<+|>+$/g, '').trim();
+  const mailto = /'mailto:%s'\s*%\s*(\S+)\s*$/.exec(url);
+  const subst = mailto ? null : /'%s'\s*%\s*(\S+)\s*$/.exec(url);
+  if (mailto) url = `mailto:${mailto[1]}`;
+  else if (subst) url = subst[1];
+  url = url.replace(/[)>.,;:]+$/, '');
+  return /^(https?:|mailto:|tel:)/i.test(url) ? url : null;
+}
+
+/**
+ * Pull a plain-text body's footnote block out of the flow.
+ *
+ * A definition is a `[n] <url>` line; a reference is only "real" when the body
+ * actually uses `[n]` somewhere else, so a plain list of numbered URLs is never
+ * mistaken for footnotes and hidden. Markers left alone on their own line are
+ * attached to the line above them, which is where the label is.
+ *
+ * @returns {{lines: string[], refs: Map<number, string>}}
+ */
+function resolveReferences(text) {
+  const raw = String(text ?? '').split(/\r?\n/).map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
+  const defs = new Map();
+  for (const line of raw) {
+    const def = /^\s*\[(\d+)\]\s+(\S.*?)\s*$/.exec(line);
+    if (!def) continue;
+    const url = cleanReferenceUrl(def[2]);
+    if (url) defs.set(Number(def[1]), url);
+  }
+  if (!defs.size) return { lines: raw, refs: new Map() };
+
+  const used = new Set();
+  for (const line of raw) {
+    const def = /^\s*\[(\d+)\]\s+/.exec(line);
+    const scan = def ? line.slice(def[0].length) : line;
+    for (const marker of scan.matchAll(/\[(\d+)\]/g)) {
+      if (defs.has(Number(marker[1]))) used.add(Number(marker[1]));
+    }
+  }
+  if (!used.size) return { lines: raw, refs: new Map() };
+
+  const refs = new Map();
+  for (const n of used) refs.set(n, defs.get(n));
+
+  const kept = raw.filter((line) => {
+    const def = /^\s*\[(\d+)\]\s+(\S.*?)\s*$/.exec(line);
+    return !(def && refs.has(Number(def[1])));
+  });
+
+  const lines = [];
+  for (const line of kept) {
+    const marker = /^\s*\[(\d+)\]\s*$/.exec(line);
+    if (marker && refs.has(Number(marker[1])) && lines.length && lines[lines.length - 1].trim()) {
+      lines[lines.length - 1] = `${lines[lines.length - 1]} [${marker[1]}]`;
+      continue;
+    }
+    lines.push(line);
+  }
+  return { lines, refs };
+}
+
+function linkify(text, refs, attachments) {
   const nodes = [];
   let last = 0;
   for (const match of text.matchAll(LINK_RE)) {
     const full = match[0];
-    const [, display, suiteHref, cidToken, bareUrl, www, email] = match;
+    const [, display, suiteHref, cidToken, boldText, italicText, marker, angleHref, bareUrl, www, email] = match;
     if (match.index > last) nodes.push(document.createTextNode(text.slice(last, match.index)));
 
     if (suiteHref) {
-      nodes.push(el('a', { class: 'autolink', href: suiteHref, target: '_blank', rel: 'noopener', text: display }));
+      nodes.push(link(display, suiteHref));
+    } else if (angleHref) {
+      nodes.push(link(angleHref, angleHref));
     } else if (cidToken) {
       const att = attachments && matchCid(cidToken, attachments);
       const isImage = att && /^image\//.test(att.mimeType || '');
@@ -78,6 +169,13 @@ function linkify(text, attachments) {
       } else {
         nodes.push(document.createTextNode(full));
       }
+    } else if (boldText !== undefined) {
+      nodes.push(el('strong', {}, ...linkify(boldText, refs, attachments)));
+    } else if (italicText !== undefined) {
+      nodes.push(el('em', {}, ...linkify(italicText, refs, attachments)));
+    } else if (marker !== undefined) {
+      const href = refs?.get(Number(marker));
+      nodes.push(href ? link(`[${marker}]`, href) : document.createTextNode(full));
     } else {
       const raw = bareUrl || www || email;
       const clean = trimUrl(raw) || raw;
@@ -85,12 +183,35 @@ function linkify(text, attachments) {
       // is already self-addressing. Such hrefs are derived from text that the
       // regex above pinned to http(s)/mailto, so nothing else can slip through.
       const href = bareUrl ? clean : (www ? `https://${clean}` : `mailto:${clean}`);
-      nodes.push(el('a', { class: 'autolink', href, target: '_blank', rel: 'noopener', text: clean }));
+      nodes.push(link(clean, href));
     }
     last = match.index + full.length;
   }
   if (last < text.length) nodes.push(document.createTextNode(text.slice(last)));
   return nodes;
+}
+
+/**
+ * Linkify one line, first collapsing `Main label [1]` into a single link on the
+ * label (or an inline image when the reference is one). A label that already
+ * carries a URL or address is left to the general pass, marker and all.
+ */
+function linkifyLine(line, refs, attachments) {
+  const trailing = /^(.*\S)\s*\[(\d+)\]$/.exec(line);
+  if (trailing && refs?.has(Number(trailing[2]))) {
+    const href = refs.get(Number(trailing[2]));
+    const label = trailing[1].replace(/^[\s|>•\-*]+/, '').replace(/[*\s]+$/, '').trim();
+    if (!hasInlineLink(label)) {
+      if (looksLikeImage(href)) {
+        return [el('img', { class: 'reader-inline-img', src: href, alt: label || 'image', loading: 'lazy' })];
+      }
+      return [link(label || href, href)];
+    }
+    // The label already carries its own link or address: drop the bare marker
+    // rather than trailing the line with a second, redundant link.
+    return linkify(label, refs, attachments);
+  }
+  return linkify(line, refs, attachments);
 }
 
 /**
@@ -101,15 +222,17 @@ function linkify(text, attachments) {
  * Form-submission services send a Key/Value report — the same rows as their
  * HTML table, as "label line, blank line, value line" pairs — which reads
  * terribly as prose, so a run of such pairs is rendered as a real table.
- * Links and `[cid:…]` inline images are resolved from the plain text.
+ * Footnote references, links, emphasis and `[cid:…]` inline images are all
+ * resolved from the plain text.
  *
  * Returns an array of DOM nodes.
  */
 export function formatTextBody(text, attachments) {
+  const { lines, refs } = resolveReferences(text);
+
   const blocks = [];
   let current = [];
-  for (const raw of String(text ?? '').split(/\r?\n/)) {
-    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+  for (const line of lines) {
     if (!line.trim()) {
       if (current.length) { blocks.push(current); current = []; }
     } else {
@@ -120,13 +243,16 @@ export function formatTextBody(text, attachments) {
 
   const paragraph = (block) => {
     const p = el('p', { class: 'reader-para' });
-    for (const node of linkify(block.join('\n'), attachments)) p.append(node);
+    block.forEach((line, i) => {
+      if (i) p.append(document.createTextNode('\n'));
+      for (const node of linkifyLine(line, refs, attachments)) p.append(node);
+    });
     return p;
   };
   const cell = (value, scope) => {
     const th = scope === 'row';
     const node = el(th ? 'th' : 'td', th ? { scope: 'row' } : {});
-    for (const part of linkify(value, attachments)) node.append(part);
+    for (const part of linkifyLine(value, refs, attachments)) node.append(part);
     return node;
   };
 
