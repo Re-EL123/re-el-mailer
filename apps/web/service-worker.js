@@ -50,6 +50,7 @@ const SHELL = [
   './js/views/compose.js',
   './js/views/campaigns.js',
   './js/views/settings.js',
+  './js/views/workspace.js',
   './js/views/admin.js',
   './assets/favicon.svg',
   './assets/icon-192.svg',

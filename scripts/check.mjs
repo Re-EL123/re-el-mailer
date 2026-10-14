@@ -284,7 +284,7 @@ else for (const key of undocumented) fail(`config reads ${key} but .env.example 
 
 const emptyRequired = [...envExample.matchAll(/^([A-Z0-9_]+)=\s*$/gm)]
   .map((m) => m[1])
-  .filter((key) => !/^(RESEND_API_KEY|JWT_SECRET|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|CRON_SECRET|RESEND_INBOUND_WEBHOOK_SECRET|RESEND_EVENT_WEBHOOK_SECRET|HEALTHCHECK_TOKEN|MAIL_REPLY_TO|INBOUND_AUTO_READ_SENDERS|MAIL_FROM_EMAIL)$/.test(key));
+  .filter((key) => !/^(RESEND_API_KEY|JWT_SECRET|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|CRON_SECRET|RESEND_INBOUND_WEBHOOK_SECRET|RESEND_EVENT_WEBHOOK_SECRET|HEALTHCHECK_TOKEN|MAIL_REPLY_TO|INBOUND_AUTO_READ_SENDERS|MAIL_FROM_EMAIL|PAYFAST_MERCHANT_ID|PAYFAST_MERCHANT_KEY|PAYFAST_PASSPHRASE)$/.test(key));
 // Values left blank are secrets or deployment-specific; a blank default for
 // anything else would silently ship a placeholder.
 if (emptyRequired.length === 0) pass('no unintended blank values in .env.example');

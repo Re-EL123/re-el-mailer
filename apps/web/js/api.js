@@ -407,6 +407,28 @@ export const api = {
     disconnect: () => post('/settings', undefined, { action: 'disconnect' }),
   },
 
+  // ── Workspaces (tenancy, team, seats) ──────────────────────────────────
+  workspaces: {
+    current: (id) => get('/workspaces', { action: 'current', id }),
+    list: () => get('/workspaces', { action: 'list' }),
+    get: (id) => get('/workspaces', { action: 'get', id }),
+    create: (name) => post('/workspaces', { name }, { action: 'create' }),
+    update: (id, body) => put('/workspaces', body, { action: 'update', id }),
+    members: (id) => get('/workspaces', { action: 'members', id }),
+    addMember: (body) => post('/workspaces', body, { action: 'add-member', id: body?.workspaceId }),
+    updateMember: (body) => put('/workspaces', body, { action: 'update-member', id: body?.workspaceId }),
+    removeMember: (userId, id) => del('/workspaces', { action: 'remove-member', id, userId }),
+    plans: () => get('/workspaces', { action: 'plans' }),
+  },
+
+  // ── Billing (subscriptions) ────────────────────────────────────────────
+  billing: {
+    subscription: (id) => get('/billing', { action: 'subscription', id }),
+    checkout: (body) => post('/billing', body, { action: 'checkout', id: body?.workspaceId }),
+    verify: (id) => get('/billing', { action: 'verify', id }),
+    cancel: (id) => post('/billing', undefined, { action: 'cancel', id }),
+  },
+
   // ── Health ─────────────────────────────────────────────────────────────
   health: {
     ping: () => get('/health', { action: 'ping' }),

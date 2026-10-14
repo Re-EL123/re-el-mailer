@@ -507,3 +507,38 @@ export const campaignUpdateSchema = z.object({
   batchSize: z.number().int().min(1).max(500).optional(),
   mailboxId: idSchema.nullish(),
 });
+
+// ─── Workspaces & billing ────────────────────────────────────────────────────
+
+export const workspaceRoleSchema = z.enum(['owner', 'admin', 'manager', 'member']);
+
+export const workspaceCreateSchema = z.object({
+  name: z.string().trim().min(1, 'Give the workspace a name.').max(120),
+});
+
+export const workspaceUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  planId: z.enum(['solo', 'team', 'business']).optional(),
+});
+
+export const workspaceMemberSchema = z.object({
+  // Either an existing user id, or an email to invite (resolved server-side).
+  userId: idSchema.optional(),
+  email: emailSchema.optional(),
+  role: workspaceRoleSchema.optional().default('member'),
+  displayName: z.string().trim().min(1).max(120).optional(),
+}).refine((value) => value.userId || value.email, {
+  message: 'Provide a user id or an email address.',
+  path: ['email'],
+});
+
+export const workspaceMemberUpdateSchema = z.object({
+  userId: idSchema,
+  role: workspaceRoleSchema,
+});
+
+export const billingCheckoutSchema = z.object({
+  planId: z.enum(['team', 'business']),
+  seats: z.number().int().min(1).max(500).optional().default(1),
+  callbackUrl: z.string().trim().url().max(2048).optional(),
+});

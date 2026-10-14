@@ -28,6 +28,10 @@ const PREFIXES = {
   notification: 'ntf',
   campaign: 'cmp',
   recipient: 'rcp',
+  workspace: 'wsp',
+  member: 'mem',
+  subscription: 'sub',
+  billingEvent: 'bev',
 };
 
 /** Cryptographically random, URL-safe token (refresh tokens, reset tokens). */

@@ -751,6 +751,130 @@ await client.query(`update public.mailboxes set storage_used_bytes = $1 where id
         : 'an automation row survived its delete',
     );
 
+    // ─── workspaces & billing ────────────────────────────────────────────────
+    console.log('\n\x1b[1m9. Workspaces & billing query layer\x1b[0m');
+    const workspaces = await import('../packages/db/workspaces.js');
+    const plans = await import('../packages/billing/plans.js');
+
+    // Backfill: a user that existed before the migration gets a personal
+    // workspace, and their un-attached mailbox is adopted. Re-running the
+    // migration is how the guarded backfill is exercised.
+    await client.query(
+      `insert into public.users (id, email, password_hash, display_name, role, status)
+       values ('usr_ws', 'ws@re-el.co.za', $1, 'Workspace Person', 'user', 'active')`,
+      [bcryptish],
+    );
+    await client.query(
+      `insert into public.mailboxes (id, user_id, domain_id, email, display_name, status)
+       values ('mbx_ws', 'usr_ws', $1, 'ws@re-el.co.za', 'Workspace Person', 'active')`,
+      [DOMAIN_ID],
+    );
+    await client.query(fs.readFileSync(path.join(MIGRATIONS_DIR, '0005_workspaces.sql'), 'utf8'));
+    const backfilled = await client.query(
+      `select w.id, w.plan_id, mb.workspace_id
+         from public.workspaces w
+         join public.mailboxes mb on mb.id = 'mbx_ws'
+        where w.owner_id = 'usr_ws' and w.is_default`,
+    );
+    ok(
+      backfilled.rows[0] && backfilled.rows[0].workspace_id === backfilled.rows[0].id
+        ? 'backfill creates a default workspace and adopts the mailbox'
+        : 'backfill did not attach the mailbox',
+    );
+    ok(
+      (
+        await client.query(
+          `select role from public.workspace_members where workspace_id = $1 and user_id = 'usr_ws'`,
+          [backfilled.rows[0].id],
+        )
+      ).rows[0]?.role === 'owner'
+        ? 'backfill makes the owner a member'
+        : 'backfill did not create owner membership',
+    );
+
+    // Application layer.
+    const ws = await workspaces.ensureWorkspaceForUser('usr_admin', { name: 'Admin Co' });
+    ok(ws?.is_default && ws.plan_id === 'solo' ? `ensureWorkspaceForUser created ${ws.id}` : 'ensureWorkspaceForUser failed');
+    const again = await workspaces.ensureWorkspaceForUser('usr_admin');
+    ok(again.id === ws.id ? 'ensureWorkspaceForUser is idempotent' : 'ensureWorkspaceForUser created a second workspace');
+    const wsList = await workspaces.listWorkspacesForUser('usr_admin');
+    ok(
+      wsList.some((w) => w.id === ws.id && w.member_role === 'owner')
+        ? 'listWorkspacesForUser includes the role'
+        : 'listWorkspacesForUser missed the workspace',
+    );
+    const addedMember = await workspaces.addMember(ws.id, 'usr_ws', 'member');
+    ok(addedMember?.role === 'member' ? 'addMember stores a role' : 'addMember failed');
+    ok((await workspaces.countMembers(ws.id)) === 2 ? 'countMembers counts both members' : 'countMembers wrong');
+    const promoted = await workspaces.updateMemberRole(ws.id, 'usr_ws', 'admin');
+    ok(promoted?.role === 'admin' ? 'updateMemberRole promotes' : 'updateMemberRole failed');
+    ok((await workspaces.removeMember(ws.id, 'usr_ws')) ? 'removeMember removes' : 'removeMember failed');
+
+    // Mailbox usage is counted per workspace.
+    const beforeMailboxes = await workspaces.countMailboxes(ws.id);
+    await client.query(`update public.mailboxes set workspace_id = $1 where id = 'mbx_main'`, [ws.id]);
+    ok(
+      (await workspaces.countMailboxes(ws.id)) === beforeMailboxes + 1
+        ? 'countMailboxes follows the workspace'
+        : 'countMailboxes did not count the attached mailbox',
+    );
+
+    // Subscriptions + entitlements.
+    const sub = await workspaces.upsertSubscription(ws.id, {
+      provider: 'payfast',
+      status: 'active',
+      planId: 'team',
+      seats: 3,
+      providerRef: 'sub_test',
+    });
+    ok(sub?.plan_id === 'team' && sub.seats === 3 ? 'upsertSubscription stores plan and seats' : 'upsertSubscription failed');
+    const patched = await workspaces.upsertSubscription(ws.id, { status: 'past_due' });
+    ok(
+      patched.status === 'past_due' && patched.plan_id === 'team'
+        ? 'upsertSubscription only patches present keys'
+        : 'upsertSubscription blanked a column',
+    );
+    ok(
+      plans.effectivePlan({ planId: 'team', status: 'past_due' }).id === 'solo'
+        ? 'effectivePlan drops a past_due subscription to free'
+        : 'effectivePlan kept a lapsed plan',
+    );
+    ok(
+      plans.effectivePlan({ planId: 'business', status: 'active' }).id === 'business'
+        ? 'effectivePlan grants an active plan'
+        : 'effectivePlan denied an active plan',
+    );
+    ok(
+      plans.seatAllowance(plans.plan('team'), { seats: 40 }) === 40
+        ? 'seatAllowance honours purchased seats above the floor'
+        : 'seatAllowance wrong',
+    );
+    const decision = plans.entitlement({ plan: plans.plan('solo'), used: 1, limit: 1, key: 'mailboxes' });
+    ok(decision.allowed === false && decision.remaining === 0 ? 'entitlement refuses at the limit' : 'entitlement allowed over the limit');
+    const byRef = await workspaces.findSubscriptionByProviderRef('payfast', 'sub_test');
+    ok(byRef?.workspace_id === ws.id ? 'findSubscriptionByProviderRef resolves the workspace' : 'findSubscriptionByProviderRef failed');
+
+    // Billing events are idempotent, so a retried webhook is a no-op.
+    const ev1 = await workspaces.recordBillingEvent({
+      provider: 'payfast',
+      eventId: 'evt_1',
+      workspaceId: ws.id,
+      type: 'payment_succeeded',
+      payload: { a: 1 },
+    });
+    const ev2 = await workspaces.recordBillingEvent({
+      provider: 'payfast',
+      eventId: 'evt_1',
+      workspaceId: ws.id,
+      type: 'payment_succeeded',
+      payload: { a: 1 },
+    });
+    ok(
+      ev1.inserted === true && ev2.inserted === false
+        ? 'recordBillingEvent dedupes on (provider, event_id)'
+        : 'recordBillingEvent was not idempotent',
+    );
+
     await poolModule.closePool();
     delete process.env.DATABASE_URL;
 
@@ -775,9 +899,12 @@ await client.query(`update public.mailboxes set storage_used_bytes = $1 where id
       return bad(`${label}: returned ${result.rows[0]?.n} rows`);
     };
 
-await expectNoRows('select count(*)::int as n from public.messages', 'anon read of messages');
+    await expectNoRows('select count(*)::int as n from public.messages', 'anon read of messages');
     await expectNoRows('select count(*)::int as n from public.settings', 'anon read of settings');
     await expectNoRows('select count(*)::int as n from public.sessions', 'anon read of sessions');
+    await expectNoRows('select count(*)::int as n from public.workspaces', 'anon read of workspaces');
+    await expectNoRows('select count(*)::int as n from public.subscriptions', 'anon read of subscriptions');
+    await expectNoRows('select count(*)::int as n from public.billing_events', 'anon read of billing events');
 
     await client.query('begin');
     await client.query('set local role anon');

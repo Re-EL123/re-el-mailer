@@ -30,6 +30,12 @@ boot and fails fast in production.
 | `RESEND_EVENT_WEBHOOK_SECRET` | Signs the delivery-event webhook |
 | `MAIL_FROM_EMAIL`, `MAIL_FROM_NAME` | Verified sending identity |
 | `MAIL_DOMAINS` | Comma-separated domains this deployment serves mailboxes for |
+| `BILLING_PROVIDER` | `none` (default) or `payfast`; any other value is treated as `none` |
+| `BILLING_CURRENCY` | Currency for display, e.g. `ZAR` (PayFast always settles ZAR) |
+| `PAYFAST_MERCHANT_ID` | PayFast merchant id; required to enable checkout |
+| `PAYFAST_MERCHANT_KEY` | PayFast merchant key; required to enable checkout |
+| `PAYFAST_PASSPHRASE` | Salts the signatures; required for recurring/subscription payments |
+| `PAYFAST_SANDBOX` | `true` (default) or `false`; set `false` only to take real payments |
 | `CRON_SECRET` | Bearer secret Vercel sends to the maintenance cron |
 | `HEALTHCHECK_TOKEN` | Optional bearer for `?action=ping` monitoring |
 
@@ -43,6 +49,13 @@ apart, but that check only covers *presence*, not semantics. Two worth calling o
   cookie on some navigation paths.
 - `MAIL_DOMAINS` must match the domains registered in the admin console. It is the
   first thing to check if a new domain's mail is rejected.
+- `BILLING_PROVIDER=payfast` requires `PAYFAST_MERCHANT_ID` and
+  `PAYFAST_MERCHANT_KEY`; without them the provider reports "not configured" and
+  checkout is refused. Point PayFast's ITN (notify URL) at
+  `https://api.mail.re-el.co.za/api/billing?action=webhook` — PayFast calls it from
+  a fixed set of IPs and the handler verifies the signature and asks PayFast to
+  confirm each callback, so the URL must be reachable from the public internet. Leave
+  `BILLING_PROVIDER=none` for a self-hosted deployment that does not sell plans.
 
 `npm run db:reset` is guarded by the `--yes` flag rather than an environment variable.
 

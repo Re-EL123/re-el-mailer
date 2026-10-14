@@ -38,6 +38,10 @@ convenience only.
   session before use, so guessing an id grants nothing.
 - **Roles** — `admin` (full platform control), `manager` (mailbox/user operations),
   `user` (own mailboxes only).
+- **Workspace roles** — `owner` / `admin` / `manager` / `member`, separate from the
+  platform roles above. Membership is required to act in a workspace; a mailbox that
+  belongs to a workspace is reachable by any member of it, while a legacy mailbox with
+  no workspace stays owner-only.
 - **Row-level security** — PostgreSQL policies mirror the application rules, so a bug in
   the query layer is not sufficient on its own to cross a tenant boundary.
 
@@ -59,6 +63,17 @@ session.
   pipeline exposes the captured raw body rather than re-reading it.
 - Inbound messages are idempotent on the provider message id, so a retried webhook does
   not create a duplicate.
+- The billing webhook (`/api/billing?action=webhook`) is a PayFast ITN, so it is
+  guarded differently to the HMAC webhooks above: the source IP must be in PayFast's
+  published ranges, the MD5 signature is recomputed over the posted form fields (in
+  the posted order, with the passphrase appended) and compared in constant time, and
+  the payload is sent back to PayFast's validate endpoint which must answer `VALID`
+  before anything is applied. The amount is checked against the plan. Events are
+  deduped on `(provider, event_id)` so a replay cannot apply a plan change twice. A
+  subscription only becomes `active` through a confirmed ITN; a checkout on its own
+  writes a `pending` row that grants nothing, so starting a checkout cannot be used to
+  self-upgrade. The browser return from checkout carries no proof of payment and is
+  only used to trigger a poll.
 
 ## Input validation
 

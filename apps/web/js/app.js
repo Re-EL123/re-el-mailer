@@ -18,6 +18,7 @@ import {
   loadLocalPrefs,
   loadSession,
   loadSettings,
+  loadWorkspaces,
   resetState,
   saveMailbox,
   state,
@@ -32,6 +33,7 @@ import { renderMessage } from './views/message.js';
 import { renderCompose } from './views/compose.js';
 import { renderCampaigns } from './views/campaigns.js';
 import { renderSettings } from './views/settings.js';
+import { renderWorkspace } from './views/workspace.js';
 import { renderAdmin } from './views/admin.js';
 
 const PUBLIC_ROUTES = new Set(['', 'login', 'forgot', 'reset', 'change-password']);
@@ -274,6 +276,7 @@ function buildShell() {
       mailboxSelect(),
       el('div', { class: 'topbar-right' },
         el('a', { class: 'icon-btn', href: '#/settings', title: 'Settings', 'aria-label': 'Settings' }, icon('settings')),
+        el('a', { class: 'icon-btn', href: '#/workspace', title: 'Workspace', 'aria-label': 'Workspace and team' }, icon('users')),
         el('a', { class: 'icon-btn', href: '#/campaigns', title: 'Campaigns', 'aria-label': 'Campaigns' }, icon('send')),
         notificationBell(),
         themeToggle(),
@@ -329,6 +332,7 @@ function enterShell() {
   mount(document.getElementById('root'), buildShell());
   setRouterContainer(viewRoot);
   loadSettings().catch(() => {});
+  loadWorkspaces().catch(() => {});
 }
 
 /**
@@ -460,6 +464,7 @@ route('search', guard((c, ctx) => renderMailList(c, { params: ['search'], query:
 route('message', guard((c, ctx) => renderMessage(c, ctx)));
 route('compose', guard((c, ctx) => renderCompose(c, ctx)));
 route('campaigns', guard((c) => renderCampaigns(c)));
+route('workspace', guard((c) => renderWorkspace(c)));
 route('settings', guard((c) => renderSettings(c)));
 route('admin', guard((c) => {
   if (!isAdmin()) {

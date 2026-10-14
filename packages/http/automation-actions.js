@@ -11,10 +11,13 @@
 import { queryBool, queryInt } from './pipeline.js';
 import { query, queryOne, queryAll } from '../db/pool.js';
 import { AppError, Codes } from '../shared/errors.js';
-import { requireMailbox, isManager } from '../auth/guard.js';
+import { requireMailbox, isManager, assertEntitlement } from '../auth/guard.js';
 import { randomToken } from '../shared/ids.js';
 import { htmlToText } from '../shared/sanitize.js';
 import { logger } from '../shared/logger.js';
+import { entitlement } from '../billing/plans.js';
+import { countRules, countWebhooks } from '../db/workspaces.js';
+import { planForMailbox } from './workspace-views.js';
 import {
   addCampaignRecipients,
   createCampaign,
@@ -504,6 +507,17 @@ export const mailboxAutomationActions = {
     schema: ruleSchema,
     handler: async (ctx) => {
       const mailbox = await mailboxFor(ctx);
+      const gate = await planForMailbox(mailbox);
+      if (gate.workspaceId) {
+        assertEntitlement(
+          entitlement({
+            plan: gate.effective,
+            used: await countRules(gate.workspaceId),
+            limit: gate.effective.rules,
+            key: 'rules',
+          }),
+        );
+      }
       const row = await createRule({
         mailboxId: mailbox.id,
         name: ctx.body.name,
@@ -631,6 +645,17 @@ export const mailboxAutomationActions = {
     schema: webhookEndpointSchema,
     handler: async (ctx) => {
       const mailbox = await mailboxFor(ctx);
+      const gate = await planForMailbox(mailbox);
+      if (gate.workspaceId) {
+        assertEntitlement(
+          entitlement({
+            plan: gate.effective,
+            used: await countWebhooks(gate.workspaceId),
+            limit: gate.effective.webhooks,
+            key: 'webhooks',
+          }),
+        );
+      }
       // The signing secret is returned once, on creation, so the operator can
       // store it. It is never echoed by the list endpoint afterwards.
       const secret = ctx.body.secret || randomToken(24);
@@ -729,6 +754,10 @@ export const campaignActions = {
     schema: campaignSchema,
     handler: async (ctx) => {
       const mailbox = await mailboxFor(ctx);
+      const gate = await planForMailbox(mailbox);
+      if (gate.workspaceId && !gate.effective.campaigns) {
+        throw new AppError(Codes.FORBIDDEN, 'Campaigns are not included in your plan.', 402);
+      }
       const row = await createCampaign({
         mailboxId: mailbox.id,
         name: ctx.body.name,

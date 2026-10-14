@@ -12,6 +12,7 @@ import { auth as authConfig } from '../shared/config.js';
 import * as usersDb from '../db/users.js';
 import * as mailboxesDb from '../db/mailboxes.js';
 import * as systemDb from '../db/system.js';
+import * as workspacesDb from '../db/workspaces.js';
 import { verifyAccessToken } from './tokens.js';
 
 const BEARER_PATTERN = /^Bearer\s+(.+)$/i;
@@ -167,7 +168,13 @@ export async function requireMailbox(session, requestedId = null) {
     mailbox = await mailboxesDb.findMailboxById(requestedId);
     if (!mailbox) throw new AppError(Codes.NOT_FOUND, 'Mailbox not found.');
     if (mailbox.user_id !== user.id && !isManager(user)) {
-      throw new AppError(Codes.MAILBOX_FORBIDDEN, undefined, 403);
+      // Tenancy: a workspace member may use any mailbox in their workspace, not
+      // just the ones they personally own. A mailbox with no workspace is
+      // legacy/personal and stays owner-only.
+      const member = mailbox.workspace_id
+        ? await workspacesDb.findMembership(mailbox.workspace_id, user.id)
+        : null;
+      if (!member) throw new AppError(Codes.MAILBOX_FORBIDDEN, undefined, 403);
     }
   } else if (session.mailbox?.id) {
     mailbox = session.mailbox;
@@ -187,6 +194,66 @@ export async function requireMailbox(session, requestedId = null) {
     throw new AppError(Codes.ACCOUNT_DISABLED, 'This mailbox has been disabled.', 403);
   }
   return mailbox;
+}
+
+/**
+ * Resolve a workspace the caller may act in and their membership role.
+ *
+ * Rules:
+ *   • `workspaceId` omitted → the caller's default workspace, lazily created if
+ *     they have none yet (older accounts and freshly-created users).
+ *   • membership is required, except for platform admins, who may administer any
+ *     workspace.
+ *
+ * @returns {Promise<{workspace: object, membership: object, role: string}>}
+ */
+export async function requireWorkspace(session, requestedId = null) {
+  const user = session.user;
+
+  if (!requestedId) {
+    const workspaces = await workspacesDb.listWorkspacesForUser(user.id);
+    const chosen = workspaces.find((w) => w.is_default) || workspaces[0];
+    if (chosen) {
+      return { workspace: chosen, membership: { role: chosen.member_role || 'member' }, role: chosen.member_role || 'member' };
+    }
+    const created = await workspacesDb.ensureWorkspaceForUser(user.id, { name: user.display_name });
+    return { workspace: created, membership: { role: 'owner' }, role: 'owner' };
+  }
+
+  const workspace = await workspacesDb.getWorkspace(requestedId);
+  if (!workspace) throw new AppError(Codes.NOT_FOUND, 'Workspace not found.');
+
+  const membership = await workspacesDb.findMembership(workspace.id, user.id);
+  if (!membership) {
+    if (user.role === 'admin') return { workspace, membership: null, role: 'owner' };
+    throw new AppError(Codes.FORBIDDEN, 'You are not a member of this workspace.', 403);
+  }
+
+  return { workspace, membership, role: membership.role };
+}
+
+/** Require at least `minimum` role within a workspace. */
+export async function requireWorkspaceRole(session, requestedId, minimum = 'admin') {
+  const resolved = await requireWorkspace(session, requestedId);
+  // Platform admins and the workspace owner always pass.
+  if (session.user.role === 'admin' || resolved.workspace.owner_id === session.user.id) {
+    return { ...resolved, role: 'owner' };
+  }
+  if (!workspacesDb.roleAtLeast(resolved.role, minimum)) {
+    throw new AppError(Codes.FORBIDDEN, `This action needs the ${minimum} role or higher.`, 403);
+  }
+  return resolved;
+}
+
+/**
+ * Throw unless an entitlement decision allows the action.
+ *
+ * The decision is built by ../billing/plans.js so the numbers live in one place
+ * and the API can return the same `allowed/used/limit` shape it enforces.
+ */
+export function assertEntitlement(decision) {
+  if (!decision || decision.allowed) return decision;
+  throw new AppError(Codes.FORBIDDEN, decision.reason || 'Your plan does not allow this.', 402);
 }
 
 /** Assert the mailbox may send outbound mail. */

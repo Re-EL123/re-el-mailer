@@ -14,7 +14,7 @@ const MAILBOX_COLUMNS = `
   mb.signature_html, mb.signature_text, mb.reply_to,
   mb.quota_bytes, mb.storage_used_bytes, mb.status,
   mb.daily_send_limit, mb.hourly_send_limit, mb.is_primary, mb.auto_read,
-  mb.created_at, mb.updated_at
+  mb.workspace_id, mb.created_at, mb.updated_at
 `;
 
 // ─── Domains ─────────────────────────────────────────────────────────────────
@@ -200,6 +200,7 @@ export async function createMailbox(
     hourlySendLimit,
     isPrimary = false,
     autoRead = false,
+    workspaceId = null,
   },
   db = DEFAULT_POOL,
 ) {
@@ -208,8 +209,10 @@ export async function createMailbox(
     `insert into public.mailboxes
        (id, user_id, domain_id, email, display_name, quota_bytes, status,
         signature_html, signature_text, reply_to, daily_send_limit, hourly_send_limit,
-        is_primary, auto_read)
-     values ($1, $2, $3, lower($4), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        is_primary, auto_read, workspace_id)
+     values ($1, $2, $3, lower($4), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+       coalesce($15, (select w.id from public.workspaces w
+                      where w.owner_id = $2 and w.is_default limit 1)))
      returning ${MAILBOX_COLUMNS.replace(/mb\./g, '')}`,
     [
       id,
@@ -226,6 +229,7 @@ export async function createMailbox(
       hourlySendLimit ?? null,
       isPrimary,
       autoRead,
+      workspaceId,
     ],
   );
 }

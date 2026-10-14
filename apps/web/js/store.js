@@ -14,6 +14,8 @@ export const state = {
   session: null, // { accessToken, expiresAt, mustChangePassword }
   mailboxes: [],
   activeMailboxId: null,
+  workspaces: [],
+  activeWorkspaceId: null,
   counts: { folders: {}, inboxUnread: 0, starred: 0 },
   labels: [],
   settings: {},
@@ -213,6 +215,30 @@ export async function loadSettings() {
   return data.settings;
 }
 
+/**
+ * Load the workspaces the signed-in user belongs to.
+ *
+ * Kept separate from `loadSession` because membership changes during a session
+ * (an invite accepted, a workspace created), and a failure here must not break
+ * sign-in — the workspace screen simply shows nothing until it can be reached.
+ */
+export async function loadWorkspaces() {
+  try {
+    const data = await api.workspaces.list();
+    const workspaces = data?.workspaces || [];
+    setState({
+      workspaces,
+      activeWorkspaceId:
+        state.activeWorkspaceId && workspaces.some((w) => w.id === state.activeWorkspaceId)
+          ? state.activeWorkspaceId
+          : workspaces[0]?.id || null,
+    });
+    return workspaces;
+  } catch {
+    return [];
+  }
+}
+
 /** Clear all auth state on sign-out. */
 export function resetState() {
   setAccessToken(null);
@@ -229,6 +255,8 @@ export function resetState() {
     session: null,
     mailboxes: [],
     activeMailboxId: null,
+    workspaces: [],
+    activeWorkspaceId: null,
     counts: { folders: {}, inboxUnread: 0, starred: 0 },
     labels: [],
   });

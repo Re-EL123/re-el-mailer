@@ -24,8 +24,11 @@ import { withTransaction } from '../packages/db/pool.js';
 import { AppError, Codes } from '../packages/shared/errors.js';
 import { logger } from '../packages/shared/logger.js';
 import { mail as mailConfig } from '../packages/shared/config.js';
-import { requireAdmin, requireRole } from '../packages/auth/guard.js';
+import { requireAdmin, requireRole, assertEntitlement } from '../packages/auth/guard.js';
 import { generatePassword, hashPassword, checkPasswordPolicy } from '../packages/auth/passwords.js';
+import { entitlement } from '../packages/billing/plans.js';
+import { countMailboxes, ensureWorkspaceForUser } from '../packages/db/workspaces.js';
+import { planForMailbox } from '../packages/http/workspace-views.js';
 import {
   countAdmins,
   createUser,
@@ -286,6 +289,10 @@ export const actions = {
             tx,
           );
 
+          // Every user gets a personal workspace, created with the account so
+          // the primary mailbox can belong to it (and be metered against it).
+          const workspace = await ensureWorkspaceForUser(created.id, { name: body.displayName }, tx);
+
           let primaryMailbox = null;
           if (domain) {
             primaryMailbox = await createMailbox(
@@ -296,6 +303,7 @@ export const actions = {
                 displayName: body.displayName,
                 status: 'active',
                 isPrimary: true,
+                workspaceId: workspace.id,
               },
               tx,
             );
@@ -492,6 +500,20 @@ export const actions = {
           throw new AppError(Codes.VALIDATION_ERROR, 'Choose a user for this mailbox.');
         }
 
+        // Meter the new mailbox against the owner's workspace plan. Ensuring the
+        // workspace first means the count is always meaningful, including for a
+        // user that was just provisioned.
+        const workspace = await ensureWorkspaceForUser(userId, { name: body.displayName || email });
+        const gate = await planForMailbox({ workspace_id: workspace.id });
+        assertEntitlement(
+          entitlement({
+            plan: gate.effective,
+            used: await countMailboxes(workspace.id),
+            limit: gate.effective.mailboxes,
+            key: 'mailboxes',
+          }),
+        );
+
         const mailbox = await withTransaction(async (tx) => {
           // Only one primary mailbox per user.
           if (body.isPrimary) {
@@ -508,6 +530,7 @@ export const actions = {
               dailySendLimit: body.dailySendLimit,
               hourlySendLimit: body.hourlySendLimit,
               isPrimary: body.isPrimary,
+              workspaceId: workspace.id,
             },
             tx,
           );

@@ -193,6 +193,33 @@ export const health = {
   token: () => optional('HEALTHCHECK_TOKEN'),
 };
 
+// ─── Billing ─────────────────────────────────────────────────────────────────
+
+/**
+ * Subscription billing. `none` (the default) disables paid checkout entirely,
+ * which is what a self-hosted deployment wants; `payfast` turns on checkout and
+ * the ITN webhook that applies plan changes. Keys are optional so the app runs
+ * without a billing account and the endpoints simply report "not configured".
+ */
+export const billing = {
+  // Deliberately not `asEnum`: billing is an optional feature, and a typo here
+  // must not throw on the send path (entitlement checks read this). An
+  // unrecognised value therefore means "off" rather than a crash.
+  provider: () => {
+    const raw = (optional('BILLING_PROVIDER', 'none') || 'none').trim().toLowerCase();
+    return raw === 'payfast' ? 'payfast' : 'none';
+  },
+  merchantId: () => optional('PAYFAST_MERCHANT_ID'),
+  merchantKey: () => optional('PAYFAST_MERCHANT_KEY'),
+  // PayFast requires a passphrase for recurring/subscription payments, and it
+  // salts the signature, so it is effectively required once billing is on.
+  passphrase: () => optional('PAYFAST_PASSPHRASE'),
+  // Default to the sandbox: a live deploy that forgets to set this must not be
+  // able to charge real cards by accident. Going live is an explicit choice.
+  sandbox: () => asBool('PAYFAST_SANDBOX', true),
+  currency: () => optional('BILLING_CURRENCY', 'ZAR'),
+};
+
 /**
  * Fail fast on startup when a required secret is missing. Called by the CLI
  * scripts and by /api/health?action=diag so problems surface early.

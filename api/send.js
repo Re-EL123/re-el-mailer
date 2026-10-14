@@ -27,6 +27,8 @@ import { logger } from '../packages/shared/logger.js';
 import { mail as mailConfig, rateLimit } from '../packages/shared/config.js';
 import { assertCanSend, requireMailbox } from '../packages/auth/guard.js';
 import { makeSnippet } from '../packages/shared/sanitize.js';
+import { countOutboundThisMonth } from '../packages/db/workspaces.js';
+import { planForMailbox } from '../packages/http/workspace-views.js';
 import {
   attachProviderIds,
   countSentForDomain,
@@ -110,6 +112,22 @@ async function assertWithinSendQuota(mailbox, session) {
       throw new AppError(Codes.RATE_LIMITED, 'This domain has reached its daily send limit.', 429, {
         details: { limit: mailConfig.dailyLimitDomain, window: 'day', scope: 'domain' },
       });
+    }
+  }
+
+  // Workspace monthly plan quota. Counted from the messages table so it holds
+  // across serverless instances; a legacy personal mailbox (no workspace) has
+  // nothing to meter against and is skipped.
+  const gate = await planForMailbox(mailbox);
+  if (gate.workspaceId) {
+    const sentThisMonth = await countOutboundThisMonth(gate.workspaceId);
+    if (sentThisMonth >= gate.effective.monthlySends) {
+      throw new AppError(
+        Codes.RATE_LIMITED,
+        `Your ${gate.effective.name} plan includes ${gate.effective.monthlySends} sends a month.`,
+        429,
+        { details: { limit: gate.effective.monthlySends, window: 'month', scope: 'workspace' } },
+      );
     }
   }
 }

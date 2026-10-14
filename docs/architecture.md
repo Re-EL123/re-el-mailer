@@ -47,6 +47,8 @@ Two pipeline rules matter:
 | `api/webhooks.js` | Resend inbound mail and delivery events | HMAC signature only |
 | `api/health.js` | ping, status, retention maintenance | public / admin / cron secret |
 | `api/settings.js` | app settings and self-service mailbox settings | session |
+| `api/workspaces.js` | workspaces, members, roles, plan catalogue | session + workspace member |
+| `api/billing.js` | subscription, checkout, verify, cancel, provider webhook | session + owner / HMAC |
 
 Each module exports `ACTIONS` plus `meta`. `scripts/check.mjs` verifies that the
 number of functions matches `vercel.json` and that every referenced module imports
@@ -63,6 +65,10 @@ Core tables (full definitions in `database/schema.sql`):
   conversation; `provider_id` stores the Resend id for delivery reconciliation.
 - `attachments` — object-storage metadata plus a per-mailbox storage path.
 - `labels`, `message_labels` — user-defined labels.
+- `workspaces`, `workspace_members` — the tenancy boundary: mailboxes belong to a
+  workspace, and membership carries a role (`owner` / `admin` / `manager` / `member`).
+- `subscriptions` — one per workspace: plan, status, purchased seats, provider ref.
+- `billing_events` — raw provider events, unique on `(provider, event_id)` for idempotency.
 - `password_resets`, `email_verifications` — one-shot, hashed tokens.
 - `audit_logs`, `rate_limits`, `app_settings`, `mailbox_stats` — operational state.
 
@@ -92,6 +98,34 @@ Resend posts to `/api/webhooks?action=inbound`. The handler verifies the HMAC ov
 provider id, store attachments, thread by subject/reference headers, and place the
 message in `inbox` (or `spam` when the provider flags it).
 
+## Workspaces & billing
+
+A workspace is the tenancy boundary. Mailboxes carry a nullable `workspace_id`: a
+row with no workspace is legacy/personal and stays owner-only, which is why
+entitlement enforcement is skipped when `workspace_id` is null (there is nothing to
+meter against). Migration `0005_workspaces.sql` backfills one default workspace per
+existing user and attaches their mailboxes.
+
+Plans live in code (`packages/billing/plans.js`), not the database, so a limit can
+never be silently edited into an inconsistent state; the database only records which
+plan a workspace is on and its billing status. `effectivePlan` grants a paid plan
+only for `active` / `trialing` subscriptions, so a lapsed card drops the workspace
+back to the free plan immediately. Entitlement checks (`assertEntitlement`) run on
+send volume, mailbox count, rules, webhooks and campaigns.
+
+Billing is pluggable (`packages/billing/provider.js`) with a PayFast implementation
+and a `none` implementation for self-hosted deployments. `BILLING_PROVIDER=none`
+(the default) disables checkout entirely and the endpoints report "not configured";
+an unrecognised value is treated as `none` so a typo cannot bill. A checkout writes a
+`pending` subscription that grants nothing. PayFast checkout is a signed HTML form
+POST (the provider returns the action and fields, and the browser submits them), and
+the browser return is just a marker that makes the plan screen poll — the only proof
+of payment is the ITN webhook (`api/billing.js?action=webhook`). That callback is
+believed only after four checks: the source IP is one of PayFast's published ranges,
+the MD5 signature is recomputed over the posted form fields, the amount matches the
+plan, and PayFast's own validate endpoint answers `VALID`. Verified events are
+deduped in `billing_events`.
+
 ## Frontend
 
 Native ES modules served as-is: no framework, no transpiler, and no bundler for
@@ -108,7 +142,7 @@ apps/web/
   js/keys.js          scoped keyboard shortcuts + help dialog
   js/icons.js         inline SVG icon set (no icon font, no emoji in chrome)
   js/ui.js            el()/mount() DOM helpers, Intl formatting, skeletons, toasts
-  js/views/*          auth, mail list, message, compose, settings, admin
+  js/views/*          auth, mail list, message, compose, campaigns, settings, workspace, admin
   js/editor-entry.js  editor bundle source, bundled at build time
   js/vendor/          generated editor.bundle.js (committed)
   css/app.css         tokens + layout, light/dark via [data-theme]
