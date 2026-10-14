@@ -161,7 +161,10 @@ export const actions = {
     method: 'POST',
     body: 'json',
     auth: 'session',
-    schema: workspaceMemberSchema.extend({ workspaceId: idSchema.optional() }),
+    // `safeExtend`, not `extend`: workspaceMemberSchema carries a refinement, and
+    // zod v4 refuses to extend a refined object (which would crash the function at
+    // module load, not at request time).
+    schema: workspaceMemberSchema.safeExtend({ workspaceId: idSchema.optional() }),
     handler: async (ctx) => {
       const workspaceId = String(ctx.body.workspaceId || ctx.query.id || '').trim();
       const context = await loadWorkspaceContext(ctx.session, workspaceId || null);
