@@ -26,6 +26,7 @@ export function workspaceView(row, { role = null } = {}) {
     name: row.name,
     slug: row.slug,
     ownerId: row.owner_id,
+    domainId: row.domain_id ?? null,
     planId: row.plan_id,
     status: row.status,
     isDefault: Boolean(row.is_default),

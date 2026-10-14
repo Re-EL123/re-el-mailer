@@ -88,7 +88,7 @@ beforeEach(() => {
   apiMock.workspaces.plans.mockResolvedValue({ plans: planList() });
   apiMock.workspaces.get.mockResolvedValue(detail());
   apiMock.workspaces.current.mockResolvedValue(detail());
-  setState({ user: { id: 'usr_1', role: 'user' }, activeWorkspaceId: 'wsp_1', workspaces: [] });
+  setState({ user: { id: 'usr_1', role: 'admin' }, activeWorkspaceId: 'wsp_1', workspaces: [] });
 });
 
 afterEach(() => {
@@ -134,35 +134,9 @@ describe('the workspace view', () => {
     expect(planCard(container, 'Team').textContent).toContain('Current plan');
   });
 
-  it('adds a member with the chosen role', async () => {
-    const container = host();
-    await renderWorkspace(container);
-    await waitFor('.member-row', container);
 
-    container.querySelector('input[placeholder="colleague@example.com"]').value = 'carol@re-el.co.za';
-    button(container, 'Add member').click();
 
-    await vi.waitFor(() => expect(apiMock.workspaces.addMember).toHaveBeenCalled());
-    expect(apiMock.workspaces.addMember).toHaveBeenCalledWith({
-      workspaceId: 'wsp_1',
-      email: 'carol@re-el.co.za',
-      role: 'member',
-    });
-  });
 
-  it('changes a member role', async () => {
-    const container = host();
-    await renderWorkspace(container);
-    await waitFor('.member-row', container);
-
-    const bobRow = [...container.querySelectorAll('.member-row')].find((r) => r.textContent.includes('Bob Nkosi'));
-    const roleSelect = bobRow.querySelector('select');
-    roleSelect.value = 'manager';
-    roleSelect.dispatchEvent(new Event('change'));
-
-    await vi.waitFor(() => expect(apiMock.workspaces.updateMember).toHaveBeenCalled());
-    expect(apiMock.workspaces.updateMember).toHaveBeenCalledWith({ workspaceId: 'wsp_1', userId: 'usr_2', role: 'manager' });
-  });
 
   it('switches the plan directly when no billing provider is configured', async () => {
     const container = host();

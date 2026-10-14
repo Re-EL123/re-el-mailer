@@ -27,7 +27,7 @@ import { mail as mailConfig } from '../packages/shared/config.js';
 import { requireAdmin, requireRole, assertEntitlement } from '../packages/auth/guard.js';
 import { generatePassword, hashPassword, checkPasswordPolicy } from '../packages/auth/passwords.js';
 import { entitlement } from '../packages/billing/plans.js';
-import { countMailboxes, ensureWorkspaceForUser } from '../packages/db/workspaces.js';
+import { countMailboxes, ensureWorkspaceForDomain } from '../packages/db/workspaces.js';
 import { planForMailbox } from '../packages/http/workspace-views.js';
 import {
   countAdmins,
@@ -289,9 +289,12 @@ export const actions = {
             tx,
           );
 
-          // Every user gets a personal workspace, created with the account so
-          // the primary mailbox can belong to it (and be metered against it).
-          const workspace = await ensureWorkspaceForUser(created.id, { name: body.displayName }, tx);
+          // A mailbox belongs to its domain's workspace, which is the org that
+          // pays for it. Ensuring it here means the primary mailbox can be
+          // metered against the organisation's plan.
+          const workspace = domain
+            ? await ensureWorkspaceForDomain(domain.id, { name: domain.name, ownerId: ctx.session.user.id }, tx)
+            : null;
 
           let primaryMailbox = null;
           if (domain) {
@@ -500,10 +503,12 @@ export const actions = {
           throw new AppError(Codes.VALIDATION_ERROR, 'Choose a user for this mailbox.');
         }
 
-        // Meter the new mailbox against the owner's workspace plan. Ensuring the
-        // workspace first means the count is always meaningful, including for a
-        // user that was just provisioned.
-        const workspace = await ensureWorkspaceForUser(userId, { name: body.displayName || email });
+        // Meter the new mailbox against the domain's (organisation's) plan.
+        // Ensuring the workspace first means the count is always meaningful.
+        const workspace = await ensureWorkspaceForDomain(domain.id, {
+          name: domain.name,
+          ownerId: ctx.session.user.id,
+        });
         const gate = await planForMailbox({ workspace_id: workspace.id });
         assertEntitlement(
           entitlement({
@@ -630,6 +635,9 @@ export const actions = {
           notes: ctx.body.notes,
           dnsRecords: [],
         });
+        // Every domain is an organisation: give it the workspace that owns its
+        // mailboxes and billing.
+        await ensureWorkspaceForDomain(domain.id, { name: domain.name, ownerId: ctx.session.user.id });
         ctx.auditEntity = { type: 'domain', id: domain.id };
         return { domain };
       },

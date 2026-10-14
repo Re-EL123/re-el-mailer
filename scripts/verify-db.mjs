@@ -756,59 +756,35 @@ await client.query(`update public.mailboxes set storage_used_bytes = $1 where id
     const workspaces = await import('../packages/db/workspaces.js');
     const plans = await import('../packages/billing/plans.js');
 
-    // Backfill: a user that existed before the migration gets a personal
-    // workspace, and their un-attached mailbox is adopted. Re-running the
-    // migration is how the guarded backfill is exercised.
+    // Domain workspaces: run 0006 (idempotent). The application layer derives
+    // members from mailboxes, so adding a mailbox makes the user a member.
+    await client.query(fs.readFileSync(path.join(MIGRATIONS_DIR, '0006_domain_workspaces.sql'), 'utf8'));
+
+    // Application layer.
+    const domainRows = await client.query('select id, name from public.domains order by created_at asc limit 1');
+    const DOMAIN_ID2 = domainRows.rows[0].id;
+    const ws = await workspaces.ensureWorkspaceForDomain(DOMAIN_ID2, { name: domainRows.rows[0].name });
+    ok(ws?.plan_id === 'solo' ? `ensureWorkspaceForDomain created ${ws.id}` : 'ensureWorkspaceForDomain failed');
+    const again = await workspaces.ensureWorkspaceForDomain(DOMAIN_ID2);
+    ok(again.id === ws.id ? 'ensureWorkspaceForDomain is idempotent' : 'ensureWorkspaceForDomain created a second workspace');
+
+    const wsListAdmin = await workspaces.listWorkspacesForUser('usr_admin', { isAdmin: true });
+    ok(wsListAdmin.some((w) => w.id === ws.id) ? 'listWorkspacesForUser includes workspaces for admin' : 'listWorkspacesForUser missed the workspace');
+
+    // Adding a mailbox makes the user a member of that domain's workspace.
     await client.query(
       `insert into public.users (id, email, password_hash, display_name, role, status)
-       values ('usr_ws', 'ws@re-el.co.za', $1, 'Workspace Person', 'user', 'active')`,
+       values ('usr_ws2', 'ws2@re-el.co.za', $1, 'Workspace Person 2', 'user', 'active')`,
       [bcryptish],
     );
     await client.query(
-      `insert into public.mailboxes (id, user_id, domain_id, email, display_name, status)
-       values ('mbx_ws', 'usr_ws', $1, 'ws@re-el.co.za', 'Workspace Person', 'active')`,
-      [DOMAIN_ID],
+      `insert into public.mailboxes (id, user_id, domain_id, email, display_name, status, workspace_id)
+       values ('mbx_ws2', 'usr_ws2', $1, 'ws2@re-el.co.za', 'Workspace Person 2', 'active', $2)`,
+      [domainId, ws.id],
     );
-    await client.query(fs.readFileSync(path.join(MIGRATIONS_DIR, '0005_workspaces.sql'), 'utf8'));
-    const backfilled = await client.query(
-      `select w.id, w.plan_id, mb.workspace_id
-         from public.workspaces w
-         join public.mailboxes mb on mb.id = 'mbx_ws'
-        where w.owner_id = 'usr_ws' and w.is_default`,
-    );
-    ok(
-      backfilled.rows[0] && backfilled.rows[0].workspace_id === backfilled.rows[0].id
-        ? 'backfill creates a default workspace and adopts the mailbox'
-        : 'backfill did not attach the mailbox',
-    );
-    ok(
-      (
-        await client.query(
-          `select role from public.workspace_members where workspace_id = $1 and user_id = 'usr_ws'`,
-          [backfilled.rows[0].id],
-        )
-      ).rows[0]?.role === 'owner'
-        ? 'backfill makes the owner a member'
-        : 'backfill did not create owner membership',
-    );
-
-    // Application layer.
-    const ws = await workspaces.ensureWorkspaceForUser('usr_admin', { name: 'Admin Co' });
-    ok(ws?.is_default && ws.plan_id === 'solo' ? `ensureWorkspaceForUser created ${ws.id}` : 'ensureWorkspaceForUser failed');
-    const again = await workspaces.ensureWorkspaceForUser('usr_admin');
-    ok(again.id === ws.id ? 'ensureWorkspaceForUser is idempotent' : 'ensureWorkspaceForUser created a second workspace');
-    const wsList = await workspaces.listWorkspacesForUser('usr_admin');
-    ok(
-      wsList.some((w) => w.id === ws.id && w.member_role === 'owner')
-        ? 'listWorkspacesForUser includes the role'
-        : 'listWorkspacesForUser missed the workspace',
-    );
-    const addedMember = await workspaces.addMember(ws.id, 'usr_ws', 'member');
-    ok(addedMember?.role === 'member' ? 'addMember stores a role' : 'addMember failed');
-    ok((await workspaces.countMembers(ws.id)) === 2 ? 'countMembers counts both members' : 'countMembers wrong');
-    const promoted = await workspaces.updateMemberRole(ws.id, 'usr_ws', 'admin');
-    ok(promoted?.role === 'admin' ? 'updateMemberRole promotes' : 'updateMemberRole failed');
-    ok((await workspaces.removeMember(ws.id, 'usr_ws')) ? 'removeMember removes' : 'removeMember failed');
+    ok((await workspaces.countMembers(ws.id)) >= 1 ? 'countMembers counts derived members' : 'countMembers wrong');
+    const members = await workspaces.listMembers(ws.id);
+    ok(Array.isArray(members) ? 'listMembers returns a list' : 'listMembers failed');
 
     // Mailbox usage is counted per workspace.
     const beforeMailboxes = await workspaces.countMailboxes(ws.id);

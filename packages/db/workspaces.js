@@ -1,10 +1,15 @@
 /**
  * Workspaces, members and billing state.
  *
- * A workspace is the tenancy boundary. Mailboxes belong to a workspace,
- * membership grants access to it, and the subscription attached to it decides
- * what the workspace may do. This module owns the rows; the plan/entitlement
- * arithmetic lives in ../billing/plans.js and stays pure.
+ * A workspace is a domain (organisation). It owns every mailbox on that domain,
+ * and the subscription attached to it decides what the organisation may do. The
+ * people in the workspace are the users with a mailbox there — membership is
+ * derived, not stored — so there is nothing to keep in sync when someone joins
+ * or leaves.
+ *
+ * This is deliberately the same authority model the product had before
+ * workspaces existed: the platform role (`users.role`) decides who may manage
+ * anything. Workspace rows only group mailboxes and hold an org's billing.
  */
 
 import * as pool from './pool.js';
@@ -24,7 +29,7 @@ export function roleAtLeast(role, minimum) {
 
 const WORKSPACE_COLUMNS = `
   w.id, w.name, w.slug, w.owner_id, w.plan_id, w.status, w.is_default,
-  w.created_at, w.updated_at
+  w.domain_id, w.created_at, w.updated_at
 `;
 
 // ─── Workspaces ──────────────────────────────────────────────────────────────
@@ -34,24 +39,38 @@ export async function getWorkspace(id, db = DEFAULT_POOL) {
   return db.queryOne(`select ${WORKSPACE_COLUMNS} from public.workspaces w where w.id = $1`, [id]);
 }
 
-export async function findDefaultWorkspaceForUser(userId, db = DEFAULT_POOL) {
+export async function findWorkspaceByDomain(domainId, db = DEFAULT_POOL) {
+  if (!domainId) return null;
+  return db.queryOne(
+    `select ${WORKSPACE_COLUMNS} from public.workspaces w where w.domain_id = $1 limit 1`,
+    [domainId],
+  );
+}
+
+/**
+ * The workspace a user belongs to, derived from the domains they have a mailbox
+ * on. Prefers their primary mailbox's domain.
+ */
+export async function findWorkspaceForUser(userId, db = DEFAULT_POOL) {
   if (!userId) return null;
   return db.queryOne(
     `select ${WORKSPACE_COLUMNS} from public.workspaces w
-     where w.owner_id = $1 and w.is_default
-     order by w.created_at asc limit 1`,
+     join public.mailboxes mb on mb.workspace_id = w.id
+     where mb.user_id = $1
+     order by mb.is_primary desc, w.created_at asc
+     limit 1`,
     [userId],
   );
 }
 
 /** A unique slug the caller may retry on collision. */
-function slugFor(name, ownerId) {
+function slugFor(name, seed) {
   const base = slugify(name) || 'workspace';
-  return `${base}-${String(ownerId || newId('workspace')).slice(-6)}`;
+  return `${base}-${String(seed || newId('workspace')).slice(-6)}`;
 }
 
 export async function createWorkspace(
-  { ownerId, name, slug, planId = 'solo', isDefault = false },
+  { ownerId, name, slug, planId = 'solo', isDefault = false, domainId = null },
   db = DEFAULT_POOL,
 ) {
   const id = newId('workspace');
@@ -59,29 +78,40 @@ export async function createWorkspace(
   if (!cleanName) throw new AppError(Codes.VALIDATION_ERROR, 'A workspace name is required.');
 
   return db.queryOne(
-    `insert into public.workspaces (id, name, slug, owner_id, plan_id, is_default)
-     values ($1, $2, $3, $4, $5, $6)
+    `insert into public.workspaces (id, name, slug, owner_id, plan_id, is_default, domain_id)
+     values ($1, $2, $3, $4, $5, $6, $7)
      returning ${WORKSPACE_COLUMNS.replace(/w\./g, '')}`,
-    [id, cleanName, slug || slugFor(cleanName, ownerId), ownerId, planId, isDefault],
+    [id, cleanName, slug || slugFor(cleanName, domainId || ownerId), ownerId, planId, isDefault, domainId],
   );
 }
 
 /**
- * The user's default workspace, created on first use.
+ * The workspace for a domain, created on first use.
  *
- * Called on user creation and as a fallback so a user that predates the
- * workspace migration always has somewhere to put a mailbox.
+ * Called when a domain is created and when the first mailbox on a domain is
+ * created, so a workspace always exists before a mailbox needs to be metered.
  */
-export async function ensureWorkspaceForUser(userId, { name } = {}, db = DEFAULT_POOL) {
-  const existing = await findDefaultWorkspaceForUser(userId, db);
+export async function ensureWorkspaceForDomain(domainId, { name, ownerId } = {}, db = DEFAULT_POOL) {
+  const existing = await findWorkspaceByDomain(domainId, db);
   if (existing) return existing;
 
-  const workspace = await createWorkspace(
-    { ownerId: userId, name: name || 'My workspace', planId: 'solo', isDefault: true },
-    db,
-  );
-  await addMember(workspace.id, userId, 'owner', db);
-  return workspace;
+  // The org owner is a platform admin; if the caller did not name one, use the
+  // first admin so the row's non-null owner is never empty.
+  let owner = ownerId || null;
+  if (!owner) {
+    const row = await db.queryOne(
+      `select id from public.users where role = 'admin' order by created_at asc limit 1`,
+    );
+    owner = row?.id || null;
+  }
+  if (!owner) {
+    throw new AppError(
+      Codes.VALIDATION_ERROR,
+      'Create an administrator before adding a mailbox on this domain.',
+    );
+  }
+
+  return createWorkspace({ ownerId: owner, name: name || domainId, planId: 'solo', domainId }, db);
 }
 
 export async function updateWorkspace(id, patch = {}, db = DEFAULT_POOL) {
@@ -107,76 +137,64 @@ export async function updateWorkspace(id, patch = {}, db = DEFAULT_POOL) {
   );
 }
 
-/** Workspaces the user belongs to, newest first, with their role and plan. */
-export async function listWorkspacesForUser(userId, db = DEFAULT_POOL) {
+/** Workspaces a caller may see: every one for a platform admin, else their own. */
+export async function listWorkspacesForUser(userId, { isAdmin = false } = {}, db = DEFAULT_POOL) {
+  const counts = `
+    (select count(*) from public.mailboxes mb where mb.workspace_id = w.id) as mailbox_count,
+    (select count(distinct mb.user_id) from public.mailboxes mb where mb.workspace_id = w.id) as member_count,
+    s.plan_id as subscription_plan, s.status as subscription_status`;
+
+  if (isAdmin) {
+    return db.queryAll(
+      `select ${WORKSPACE_COLUMNS}, 'owner'::text as member_role, ${counts}
+       from public.workspaces w
+       left join public.subscriptions s on s.workspace_id = w.id
+       order by w.created_at asc`,
+    );
+  }
+
   return db.queryAll(
-    `select ${WORKSPACE_COLUMNS}, m.role as member_role,
-            (select count(*) from public.mailboxes mb where mb.workspace_id = w.id) as mailbox_count,
-            (select count(*) from public.workspace_members mm where mm.workspace_id = w.id) as member_count,
-            s.plan_id as subscription_plan, s.status as subscription_status
-     from public.workspace_members m
-     join public.workspaces w on w.id = m.workspace_id
+    `select ${WORKSPACE_COLUMNS}, 'member'::text as member_role, ${counts}
+     from public.workspaces w
      left join public.subscriptions s on s.workspace_id = w.id
-     where m.user_id = $1
-     order by w.is_default desc, w.created_at asc`,
+     where exists (
+       select 1 from public.mailboxes mb where mb.workspace_id = w.id and mb.user_id = $1
+     )
+     order by w.created_at asc`,
     [userId],
   );
 }
 
-// ─── Members ─────────────────────────────────────────────────────────────────
-
-export async function findMembership(workspaceId, userId, db = DEFAULT_POOL) {
-  if (!workspaceId || !userId) return null;
-  return db.queryOne(
-    `select workspace_id, user_id, role, created_at
-     from public.workspace_members
-     where workspace_id = $1 and user_id = $2`,
+/** True when the user has a mailbox in the workspace. Membership is derived. */
+export async function userInWorkspace(workspaceId, userId, db = DEFAULT_POOL) {
+  if (!workspaceId || !userId) return false;
+  const row = await db.queryOne(
+    `select 1 as ok from public.mailboxes where workspace_id = $1 and user_id = $2 limit 1`,
     [workspaceId, userId],
   );
+  return Boolean(row);
 }
+
+// ─── Members (derived from the domain's mailboxes) ───────────────────────────
 
 export async function listMembers(workspaceId, db = DEFAULT_POOL) {
   return db.queryAll(
-    `select m.user_id, m.role, m.created_at,
+    `select mb.user_id,
+            case when u.role = 'admin' then 'admin' else 'member' end as role,
+            min(mb.created_at) as created_at,
             u.email, u.display_name, u.status, u.role as platform_role, u.last_login_at
-     from public.workspace_members m
-     join public.users u on u.id = m.user_id
-     where m.workspace_id = $1
-     order by (m.role = 'owner') desc, u.display_name asc`,
+     from public.mailboxes mb
+     join public.users u on u.id = mb.user_id
+     where mb.workspace_id = $1
+     group by mb.user_id, u.email, u.display_name, u.status, u.role, u.last_login_at
+     order by (u.role = 'admin') desc, u.display_name asc`,
     [workspaceId],
   );
 }
 
-export async function addMember(workspaceId, userId, role = 'member', db = DEFAULT_POOL) {
-  return db.queryOne(
-    `insert into public.workspace_members (workspace_id, user_id, role)
-     values ($1, $2, $3)
-     on conflict (workspace_id, user_id) do update set role = excluded.role
-     returning workspace_id, user_id, role, created_at`,
-    [workspaceId, userId, role],
-  );
-}
-
-export async function updateMemberRole(workspaceId, userId, role, db = DEFAULT_POOL) {
-  return db.queryOne(
-    `update public.workspace_members set role = $3
-     where workspace_id = $1 and user_id = $2
-     returning workspace_id, user_id, role, created_at`,
-    [workspaceId, userId, role],
-  );
-}
-
-export async function removeMember(workspaceId, userId, db = DEFAULT_POOL) {
-  const { rowCount } = await db.query(
-    `delete from public.workspace_members where workspace_id = $1 and user_id = $2`,
-    [workspaceId, userId],
-  );
-  return rowCount > 0;
-}
-
 export async function countMembers(workspaceId, db = DEFAULT_POOL) {
   const row = await db.queryOne(
-    `select count(*)::int as count from public.workspace_members where workspace_id = $1`,
+    `select count(distinct user_id)::int as count from public.mailboxes where workspace_id = $1`,
     [workspaceId],
   );
   return Number(row?.count ?? 0);

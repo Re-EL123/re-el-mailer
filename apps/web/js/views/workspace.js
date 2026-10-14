@@ -17,7 +17,6 @@ import { loadWorkspaces, state } from '../store.js';
 
 const ROLE_LABEL = { owner: 'Owner', admin: 'Admin', manager: 'Manager', member: 'Member' };
 const STATUS_LABEL = { active: 'Active', trialing: 'Trial', past_due: 'Past due', canceled: 'Canceled', pending: 'Pending' };
-const ROLE_OPTIONS = ['member', 'manager', 'admin', 'owner'];
 
 function money(minor) {
   const value = Number(minor || 0) / 100;
@@ -143,110 +142,54 @@ export async function renderWorkspace(container) {
   }
 
   function renderHeader(context) {
-    const select = el('select', { class: 'field' },
-      ...workspaces.map((w) => el('option', { value: w.id, text: w.name, selected: w.id === activeId })),
-    );
-    select.addEventListener('change', async () => {
-      activeId = select.value;
-      const ws = workspaces.find((w) => w.id === activeId);
-      if (ws) state.activeWorkspaceId = ws.id;
-      await refresh();
-    });
+    const children = [
+      el('h3', { class: 'card-title', text: 'Organisation' }),
+      el('p', { class: 'setting-note', text: 'A workspace is a domain. Its mailboxes and billing belong to the organisation.' }),
+    ];
 
-    const name = el('input', { class: 'field', placeholder: 'New workspace name', maxlength: 120 });
-    const create = el('button', { class: 'btn btn-primary', text: 'Create', onClick: async () => {
-      if (!name.value.trim()) return;
-      try {
-        const created = await api.workspaces.create(name.value.trim());
-        toast('Workspace created.', 'success');
-        name.value = '';
-        await loadWorkspaces();
-        activeId = created?.workspace?.id || activeId;
+    if (workspaces.length > 1) {
+      const select = el('select', { class: 'field' },
+        ...workspaces.map((w) => el('option', { value: w.id, text: w.name, selected: w.id === activeId })),
+      );
+      select.addEventListener('change', async () => {
+        activeId = select.value;
+        const ws = workspaces.find((w) => w.id === activeId);
+        if (ws) state.activeWorkspaceId = ws.id;
         await refresh();
-      } catch (err) { toast(describeApiError(err), 'error'); }
-    } });
-
-    mount(header,
-      el('h3', { class: 'card-title', text: 'Workspace' }),
-      el('p', { class: 'setting-note', text: `Your role here: ${ROLE_LABEL[context.role] || context.role}.` }),
-      el('div', { class: 'setting-grid' },
+      });
+      children.push(
         el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Current workspace' }), select),
-        el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Create another' }), name),
-      ),
-      create,
-    );
+      );
+    } else {
+      children.push(el('p', { class: 'muted small', text: context.workspace?.name || '' }));
+    }
+
+    mount(header, ...children);
   }
 
   function renderTeam(context) {
-    const canManage = ['owner', 'admin'].includes(context.role) || state.user?.role === 'admin';
-
-    const email = el('input', { class: 'field', type: 'email', placeholder: 'colleague@example.com' });
-    const role = el('select', { class: 'field' },
-      ...ROLE_OPTIONS.map((r) => el('option', { value: r, text: ROLE_LABEL[r] })),
-    );
-    const add = el('button', { class: 'btn btn-primary', text: 'Add member', onClick: async () => {
-      if (!email.value.trim()) return;
-      try {
-        await api.workspaces.addMember({ workspaceId: activeId, email: email.value.trim(), role: role.value });
-        toast('Member added.', 'success');
-        email.value = '';
-        await refresh();
-      } catch (err) { toast(describeApiError(err), 'error'); }
-    } });
-
-    const rows = (context.members || []).map((member) => {
-      const roleSelect = el('select', { class: 'field field-inline', disabled: !canManage },
-        ...ROLE_OPTIONS.map((r) => el('option', { value: r, text: ROLE_LABEL[r], selected: r === member.role })),
-      );
-      roleSelect.addEventListener('change', async () => {
-        try {
-          await api.workspaces.updateMember({ workspaceId: activeId, userId: member.userId, role: roleSelect.value });
-          toast('Role updated.', 'success');
-          await refresh();
-        } catch (err) { toast(describeApiError(err), 'error'); await refresh(); }
-      });
-
-      return el('div', { class: 'member-row' },
+    const rows = (context.members || []).map((member) =>
+      el('div', { class: 'member-row' },
         el('div', { class: 'member-body' },
           el('span', { class: 'member-name', text: member.displayName || member.email }),
           el('span', { class: 'muted small', text: member.email }),
         ),
-        roleSelect,
-        canManage
-          ? el('button', { class: 'btn btn-sm', text: 'Remove', onClick: async () => {
-              const ok = await confirmDialog(`Remove ${member.displayName || member.email} from this workspace?`, { confirmText: 'Remove', danger: true });
-              if (!ok) return;
-              try {
-                await api.workspaces.removeMember(member.userId, activeId);
-                toast('Member removed.', 'success');
-                await refresh();
-              } catch (err) { toast(describeApiError(err), 'error'); }
-            } })
-          : null,
-      );
-    });
+        el('span', { class: 'pill', text: ROLE_LABEL[member.role] || 'Member' }),
+      ),
+    );
 
     mount(team,
       el('h3', { class: 'card-title', text: 'Team' }),
       usageLine('Seats used', context.usage?.members ?? 0, context.seats),
       ...(rows.length ? rows : [el('p', { class: 'muted small', text: 'No members yet.' })]),
-      canManage
-        ? el('div', { class: 'setting-grid' },
-            el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Invite by email' }), email),
-            el('label', { class: 'field' }, el('span', { class: 'field-label', text: 'Role' }), role),
-          )
-        : null,
-      canManage ? add : null,
-      canManage
-        ? null
-        : el('p', { class: 'setting-note', text: 'Only an owner or admin can manage the team.' }),
+      el('p', { class: 'setting-note', text: 'Everyone with a mailbox on this domain. Access is managed by an administrator.' }),
     );
   }
 
   function renderPlan(context, planList) {
     const current = context.plan?.id || 'solo';
     const billingReady = Boolean(context.billing?.configured);
-    const canManage = ['owner', 'admin'].includes(context.role) || state.user?.role === 'admin';
+    const canManage = state.user?.role === 'admin';
 
     const cards = planList.map((p) => {
       const isCurrent = p.id === current;

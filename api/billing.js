@@ -24,11 +24,10 @@ import { billing as billingConfig } from '../packages/shared/config.js';
 import { plan as planById } from '../packages/billing/plans.js';
 import { billingProvider } from '../packages/billing/provider.js';
 import {
-  findDefaultWorkspaceForUser,
   findSubscriptionByProviderRef,
+  findWorkspaceForUser,
   getWorkspace,
   recordBillingEvent,
-  roleAtLeast,
   upsertSubscription,
 } from '../packages/db/workspaces.js';
 import { findByEmail } from '../packages/db/users.js';
@@ -62,12 +61,14 @@ async function subscriptionDetail(session, requestedId) {
   };
 }
 
-/** Only a workspace owner (or a platform admin) may change billing. */
-function assertBillingAdmin(session, role) {
+/**
+ * Only a platform administrator may manage the organisation's billing. The org
+ * is billed, not its members, and the same authority that governs the domain
+ * governs its subscription.
+ */
+function assertBillingAdmin(session) {
   if (session.user.role === 'admin') return;
-  if (!roleAtLeast(role, 'owner')) {
-    throw new AppError(Codes.FORBIDDEN, 'Only the workspace owner can manage billing.', 403);
-  }
+  throw new AppError(Codes.ADMIN_REQUIRED, 'Only an administrator can manage billing.', 403);
 }
 
 /**
@@ -87,7 +88,7 @@ async function resolveEventWorkspace(event, providerName) {
   }
   if (event.customer) {
     const user = await findByEmail(event.customer);
-    if (user) return findDefaultWorkspaceForUser(user.id);
+    if (user) return findWorkspaceForUser(user.id);
   }
   return null;
 }
@@ -149,7 +150,7 @@ export const actions = {
     handler: async (ctx) => {
       const workspaceId = String(ctx.body.workspaceId || ctx.query.id || '').trim();
       const context = await loadWorkspaceContext(ctx.session, workspaceId || null);
-      assertBillingAdmin(ctx.session, context.role);
+      assertBillingAdmin(ctx.session);
 
       const provider = billingProvider();
       if (!provider.configured) {
@@ -214,7 +215,7 @@ export const actions = {
     auth: 'session',
     handler: async (ctx) => {
       const context = await loadWorkspaceContext(ctx.session, ctx.query.id || null);
-      assertBillingAdmin(ctx.session, context.role);
+      assertBillingAdmin(ctx.session);
       await upsertSubscription(context.workspace.id, { status: 'canceled' });
       return subscriptionDetail(ctx.session, context.workspace.id);
     },

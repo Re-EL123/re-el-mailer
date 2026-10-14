@@ -18,9 +18,9 @@ process.env.JWT_SECRET = 'x'.repeat(48);
 
 const db = {
   listWorkspacesForUser: vi.fn(),
-  ensureWorkspaceForUser: vi.fn(),
   getWorkspace: vi.fn(),
-  findMembership: vi.fn(),
+  findWorkspaceForUser: vi.fn(),
+  userInWorkspace: vi.fn(),
 };
 
 vi.mock('../packages/db/workspaces.js', async (io) => ({
@@ -51,33 +51,28 @@ beforeEach(() => {
 });
 
 describe('requireWorkspace', () => {
-  it('resolves the default workspace when none is named', async () => {
+  it('resolves the workspace when none is named', async () => {
     db.listWorkspacesForUser.mockResolvedValue([
-      { id: 'wsp_2', is_default: false, member_role: 'member' },
-      { id: 'wsp_1', is_default: true, member_role: 'admin' },
+      { id: 'wsp_1', member_role: 'admin' },
     ]);
     const resolved = await requireWorkspace(session());
     expect(resolved.workspace.id).toBe('wsp_1');
     expect(resolved.role).toBe('admin');
   });
 
-  it('lazily creates a workspace for an account that has none', async () => {
+  it('forbids a non-admin with no workspace', async () => {
     db.listWorkspacesForUser.mockResolvedValue([]);
-    db.ensureWorkspaceForUser.mockResolvedValue(workspace());
-    const resolved = await requireWorkspace(session());
-    expect(db.ensureWorkspaceForUser).toHaveBeenCalledWith('usr_1', { name: undefined });
-    expect(resolved.role).toBe('owner');
+    await expect(requireWorkspace(session())).rejects.toMatchObject({ status: 403 });
   });
 
   it('refuses a non-member of a named workspace', async () => {
     db.getWorkspace.mockResolvedValue(workspace());
-    db.findMembership.mockResolvedValue(null);
+    db.userInWorkspace.mockResolvedValue(false);
     await expect(requireWorkspace(session(), 'wsp_1')).rejects.toMatchObject({ status: 403 });
   });
 
-  it('lets a platform admin administer any workspace without a membership row', async () => {
+  it('lets a platform admin administer any workspace', async () => {
     db.getWorkspace.mockResolvedValue(workspace({ owner_id: 'someone_else' }));
-    db.findMembership.mockResolvedValue(null);
     const resolved = await requireWorkspace(session(user({ role: 'admin' })), 'wsp_1');
     expect(resolved.role).toBe('owner');
   });
@@ -89,29 +84,25 @@ describe('requireWorkspace', () => {
 });
 
 describe('requireWorkspaceRole', () => {
-  it('treats the workspace owner as owner regardless of stored role', async () => {
-    db.listWorkspacesForUser.mockResolvedValue([{ id: 'wsp_1', is_default: true, owner_id: 'usr_1', member_role: 'member' }]);
-    const resolved = await requireWorkspaceRole(session(), null, 'admin');
+  it('lets a platform admin pass when resolving a workspace', async () => {
+    db.getWorkspace.mockResolvedValue(workspace({ owner_id: 'other' }));
+    db.userInWorkspace.mockResolvedValue(true);
+    const resolved = await requireWorkspaceRole(session(user({ role: 'admin' })), 'wsp_1', 'admin');
     expect(resolved.role).toBe('owner');
   });
 
-  it('lets a platform admin pass', async () => {
+
+
+  it('allows a platform admin to manage a workspace', async () => {
     db.getWorkspace.mockResolvedValue(workspace({ owner_id: 'other' }));
-    db.findMembership.mockResolvedValue({ role: 'member' });
-    const resolved = await requireWorkspaceRole(session(user({ role: 'admin' })), 'wsp_1', 'owner');
+    db.userInWorkspace.mockResolvedValue(false);
+    const resolved = await requireWorkspaceRole(session(user({ role: 'admin' })), 'wsp_1', 'admin');
     expect(resolved.role).toBe('owner');
   });
 
-  it('passes a member whose role meets the minimum', async () => {
+  it('refuses a non-admin from managing a workspace', async () => {
     db.getWorkspace.mockResolvedValue(workspace({ owner_id: 'other' }));
-    db.findMembership.mockResolvedValue({ role: 'admin' });
-    const resolved = await requireWorkspaceRole(session(), 'wsp_1', 'admin');
-    expect(resolved.role).toBe('admin');
-  });
-
-  it('refuses a member whose role is below the minimum', async () => {
-    db.getWorkspace.mockResolvedValue(workspace({ owner_id: 'other' }));
-    db.findMembership.mockResolvedValue({ role: 'member' });
+    db.userInWorkspace.mockResolvedValue(true);
     await expect(requireWorkspaceRole(session(), 'wsp_1', 'admin')).rejects.toMatchObject({ status: 403 });
   });
 });
@@ -126,19 +117,16 @@ describe('requireMailbox tenancy', () => {
   it('keeps a legacy mailbox owner-only', async () => {
     mailboxesDb.findMailboxById.mockResolvedValue({ id: 'mbx_1', user_id: 'other', workspace_id: null, status: 'active' });
     await expect(requireMailbox(session(), 'mbx_1')).rejects.toMatchObject({ status: 403 });
-    expect(db.findMembership).not.toHaveBeenCalled();
+
   });
 
-  it('allows a workspace member to use a mailbox in their workspace', async () => {
+  it('still refuses a non-owner even if workspace-attached (owner-only)', async () => {
     mailboxesDb.findMailboxById.mockResolvedValue({ id: 'mbx_1', user_id: 'other', workspace_id: 'wsp_1', status: 'active' });
-    db.findMembership.mockResolvedValue({ role: 'member' });
-    const mailbox = await requireMailbox(session(), 'mbx_1');
-    expect(mailbox.id).toBe('mbx_1');
+    await expect(requireMailbox(session(), 'mbx_1')).rejects.toMatchObject({ status: 403 });
   });
 
-  it('refuses a non-member of the workspace that owns the mailbox', async () => {
+  it('keeps refusing a non-owner of a workspace mailbox', async () => {
     mailboxesDb.findMailboxById.mockResolvedValue({ id: 'mbx_1', user_id: 'other', workspace_id: 'wsp_1', status: 'active' });
-    db.findMembership.mockResolvedValue(null);
     await expect(requireMailbox(session(), 'mbx_1')).rejects.toMatchObject({ status: 403 });
   });
 });

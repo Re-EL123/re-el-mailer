@@ -407,17 +407,13 @@ export const api = {
     disconnect: () => post('/settings', undefined, { action: 'disconnect' }),
   },
 
-  // ── Workspaces (tenancy, team, seats) ──────────────────────────────────
+  // ── Workspaces (organisation billing) ──────────────────────────────────
   workspaces: {
     current: (id) => get('/workspaces', { action: 'current', id }),
     list: () => get('/workspaces', { action: 'list' }),
     get: (id) => get('/workspaces', { action: 'get', id }),
-    create: (name) => post('/workspaces', { name }, { action: 'create' }),
     update: (id, body) => put('/workspaces', body, { action: 'update', id }),
     members: (id) => get('/workspaces', { action: 'members', id }),
-    addMember: (body) => post('/workspaces', body, { action: 'add-member', id: body?.workspaceId }),
-    updateMember: (body) => put('/workspaces', body, { action: 'update-member', id: body?.workspaceId }),
-    removeMember: (userId, id) => del('/workspaces', { action: 'remove-member', id, userId }),
     plans: () => get('/workspaces', { action: 'plans' }),
   },
 

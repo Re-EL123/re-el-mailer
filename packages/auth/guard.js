@@ -158,6 +158,9 @@ export function isManager(user) {
  *   • admin/manager → any mailbox.
  *   • user → only mailboxes they own.
  *
+ * A workspace groups a domain's mailboxes but does not widen access: sharing a
+ * domain with someone has never let you read their mail, and it still does not.
+ *
  * @returns {Promise<object>} the mailbox row
  */
 export async function requireMailbox(session, requestedId = null) {
@@ -168,13 +171,7 @@ export async function requireMailbox(session, requestedId = null) {
     mailbox = await mailboxesDb.findMailboxById(requestedId);
     if (!mailbox) throw new AppError(Codes.NOT_FOUND, 'Mailbox not found.');
     if (mailbox.user_id !== user.id && !isManager(user)) {
-      // Tenancy: a workspace member may use any mailbox in their workspace, not
-      // just the ones they personally own. A mailbox with no workspace is
-      // legacy/personal and stays owner-only.
-      const member = mailbox.workspace_id
-        ? await workspacesDb.findMembership(mailbox.workspace_id, user.id)
-        : null;
-      if (!member) throw new AppError(Codes.MAILBOX_FORBIDDEN, undefined, 403);
+      throw new AppError(Codes.MAILBOX_FORBIDDEN, undefined, 403);
     }
   } else if (session.mailbox?.id) {
     mailbox = session.mailbox;
@@ -197,52 +194,59 @@ export async function requireMailbox(session, requestedId = null) {
 }
 
 /**
- * Resolve a workspace the caller may act in and their membership role.
+ * Resolve a workspace the caller may act in and their effective role.
  *
  * Rules:
- *   • `workspaceId` omitted → the caller's default workspace, lazily created if
- *     they have none yet (older accounts and freshly-created users).
- *   • membership is required, except for platform admins, who may administer any
- *     workspace.
+ *   • `workspaceId` omitted → the caller's own workspace: any workspace for a
+ *     platform admin, else the workspace of the domain they have a mailbox on.
+ *   • platform admins may act in any workspace (role `owner`).
+ *   • anyone else is a `member` of a workspace only when they have a mailbox in
+ *     it. Workspace roles are informational; the platform role grants power.
  *
- * @returns {Promise<{workspace: object, membership: object, role: string}>}
+ * @returns {Promise<{workspace: object, membership: object|null, role: string}>}
  */
 export async function requireWorkspace(session, requestedId = null) {
   const user = session.user;
+  const isAdmin = user.role === 'admin';
 
   if (!requestedId) {
-    const workspaces = await workspacesDb.listWorkspacesForUser(user.id);
-    const chosen = workspaces.find((w) => w.is_default) || workspaces[0];
+    const workspaces = await workspacesDb.listWorkspacesForUser(user.id, { isAdmin });
+    const chosen = workspaces[0];
     if (chosen) {
-      return { workspace: chosen, membership: { role: chosen.member_role || 'member' }, role: chosen.member_role || 'member' };
+      return {
+        workspace: chosen,
+        membership: null,
+        role: chosen.member_role || (isAdmin ? 'owner' : 'member'),
+      };
     }
-    const created = await workspacesDb.ensureWorkspaceForUser(user.id, { name: user.display_name });
-    return { workspace: created, membership: { role: 'owner' }, role: 'owner' };
+    if (isAdmin) throw new AppError(Codes.NOT_FOUND, 'No workspace exists yet.');
+    throw new AppError(Codes.FORBIDDEN, 'You do not have access to a workspace yet.', 403);
   }
 
   const workspace = await workspacesDb.getWorkspace(requestedId);
   if (!workspace) throw new AppError(Codes.NOT_FOUND, 'Workspace not found.');
 
-  const membership = await workspacesDb.findMembership(workspace.id, user.id);
-  if (!membership) {
-    if (user.role === 'admin') return { workspace, membership: null, role: 'owner' };
-    throw new AppError(Codes.FORBIDDEN, 'You are not a member of this workspace.', 403);
+  if (isAdmin) return { workspace, membership: null, role: 'owner' };
+  if (await workspacesDb.userInWorkspace(workspace.id, user.id)) {
+    return { workspace, membership: null, role: 'member' };
   }
-
-  return { workspace, membership, role: membership.role };
+  throw new AppError(Codes.FORBIDDEN, 'You are not a member of this workspace.', 403);
 }
 
-/** Require at least `minimum` role within a workspace. */
-export async function requireWorkspaceRole(session, requestedId, minimum = 'admin') {
+/**
+ * Require a workspace the caller may *administer*.
+ *
+ * Only platform administrators manage a workspace (its plan, billing and
+ * people). A workspace owner role, or any other workspace role, grants nothing
+ * on its own — this keeps managing "the domain's emails" behind the same
+ * authority the product has always used.
+ */
+export async function requireWorkspaceRole(session, requestedId, _minimum = 'admin') {
   const resolved = await requireWorkspace(session, requestedId);
-  // Platform admins and the workspace owner always pass.
-  if (session.user.role === 'admin' || resolved.workspace.owner_id === session.user.id) {
-    return { ...resolved, role: 'owner' };
+  if (session.user.role !== 'admin') {
+    throw new AppError(Codes.ADMIN_REQUIRED, 'Only an administrator can manage workspace settings.', 403);
   }
-  if (!workspacesDb.roleAtLeast(resolved.role, minimum)) {
-    throw new AppError(Codes.FORBIDDEN, `This action needs the ${minimum} role or higher.`, 403);
-  }
-  return resolved;
+  return { ...resolved, role: 'owner' };
 }
 
 /**
