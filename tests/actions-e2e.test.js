@@ -32,6 +32,8 @@ const dbMessages = {
   update: vi.fn(),
   createMessage: vi.fn(),
   createAttachment: vi.fn(),
+  findAttachment: vi.fn(),
+  markAttachmentDeleted: vi.fn(),
   moveToFolder: vi.fn(),
   destroy: vi.fn(),
   listAttachments: vi.fn(),
@@ -294,6 +296,27 @@ describe('drafts and attachments resolve their mailbox too', () => {
     expect(dbMessages.createAttachment).toHaveBeenCalledWith(
       expect.objectContaining({ mailboxId: 'mbx_2', messageId: 'draft_1' }),
     );
+  });
+
+  it('attachment-delete removes the file from the draft and its storage object', async () => {
+    dbMessages.findOwned.mockResolvedValue(row({ id: 'draft_1', folder: 'drafts', is_draft: true }));
+    dbMessages.findAttachment.mockResolvedValue({ id: 'att_1', storage_path: '/objects/att_1' });
+    dbMessages.listAttachments.mockResolvedValue([]);
+    await api.mail.attachmentDelete({ draftId: 'draft_1', attachmentId: 'att_1', mailboxId: 'mbx_2' });
+    expect(dbMessages.findAttachment).toHaveBeenCalledWith('att_1', 'draft_1');
+    expect(dbMessages.markAttachmentDeleted).toHaveBeenCalledWith('att_1', 'draft_1');
+    expect(dbStorage.deleteAttachments).toHaveBeenCalledWith(['/objects/att_1']);
+    expect(dbMessages.setHasAttachments).toHaveBeenCalledWith('draft_1', false);
+  });
+
+  it('attachment-delete refuses an attachment that belongs to another draft', async () => {
+    dbMessages.findOwned.mockResolvedValue(row({ id: 'draft_1', folder: 'drafts', is_draft: true }));
+    dbMessages.findAttachment.mockResolvedValue(null);
+    await expect(
+      api.mail.attachmentDelete({ draftId: 'draft_1', attachmentId: 'att_other', mailboxId: 'mbx_2' }),
+    ).rejects.toThrow(/Attachment not found/);
+    expect(dbMessages.markAttachmentDeleted).not.toHaveBeenCalled();
+    expect(dbStorage.deleteAttachments).not.toHaveBeenCalled();
   });
 
   it('setting a label on a message the user owns elsewhere still works (no mailbox mixes)', async () => {

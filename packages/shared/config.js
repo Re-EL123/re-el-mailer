@@ -167,6 +167,8 @@ export const mail = {
   maxBcc: asInt('SEND_MAX_RECIPIENTS_BCC', 50),
   maxSubjectLength: asInt('SEND_MAX_SUBJECT_LENGTH', 200),
   maxBodyBytes: asInt('SEND_MAX_BODY_BYTES', 512_000),
+  /** Most files one message may carry. */
+  maxAttachments: asInt('SEND_MAX_ATTACHMENTS', 25),
   storeRawMime: asBool('STORE_RAW_MIME', false),
   inboundMaxBytes: asInt('INBOUND_MAX_BYTES', 26_214_400),
   inboundAutoReadSenders: asList('INBOUND_AUTO_READ_SENDERS'),

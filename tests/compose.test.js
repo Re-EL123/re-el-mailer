@@ -21,6 +21,7 @@ const {
   buildForwardDraft,
   recipientSuggestions,
 } = await import('../packages/mail/compose.js');
+const { mail: mailConfig } = await import('../packages/shared/config.js');
 
 describe('normalizeRecipients', () => {
   it('lowercases and de-duplicates addresses', () => {
@@ -78,8 +79,11 @@ describe('assertSendable', () => {
   });
 
   it('rejects more attachments than allowed', () => {
-    const attachments = Array.from({ length: 11 }, () => ({ filename: 'a.txt', size: 10 }));
+    const attachments = Array.from({ length: mailConfig.maxAttachments + 1 }, () => ({ filename: 'a.txt', size: 10 }));
     expect(() => assertSendable({ ...base, attachments })).toThrow();
+    expect(() =>
+      assertSendable({ ...base, attachments: attachments.slice(0, mailConfig.maxAttachments) }),
+    ).not.toThrow();
   });
 
   it('requires From to be on a domain this deployment serves', () => {

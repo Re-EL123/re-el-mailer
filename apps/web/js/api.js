@@ -303,6 +303,7 @@ export const api = {
     deleteDraft: (id, mailboxId) => del('/mail', { action: 'delete-draft', id, mailboxId }),
     attachmentUploadUrl: (payload) => request('/mail', { method: 'POST', body: payload, query: { action: 'attachment-upload-url', mailboxId: payload?.mailboxId } }),
     attachmentComplete: (payload) => request('/mail', { method: 'POST', body: payload, query: { action: 'attachment-complete', mailboxId: payload?.mailboxId } }),
+    attachmentDelete: (payload) => request('/mail', { method: 'POST', body: payload, query: { action: 'attachment-delete', mailboxId: payload?.mailboxId } }),
     attachmentUrl: (id, messageId, inline, mailboxId) =>
       get('/mail', { action: 'attachment-url', id, messageId, inline: inline ? 1 : undefined, mailboxId }),
   },

@@ -24,6 +24,13 @@ import { activeMailbox, state } from '../store.js';
 import { navigate } from '../router.js';
 import { pushShortcuts } from '../keys.js';
 
+/**
+ * Most files one message may carry. Mirrors the server's SEND_MAX_ATTACHMENTS
+ * (packages/shared/config.js); the server still enforces it, so a drift here
+ * only changes whether the user is warned before or after the upload.
+ */
+const MAX_ATTACHMENTS = 25;
+
 export async function renderCompose(container, ctx) {
   const mailboxId = ctx.query.mailbox || state.activeMailboxId;
   let draftId = ctx.query.draft || null;
@@ -631,20 +638,60 @@ export async function renderCompose(container, ctx) {
   // attachments stored against the draft id, so re-sending ids here would be both
   // redundant and, for a new draft, wrong.
   const attachments = [...(seed.attachments || [])];
+  // Uploads in flight. Shown immediately so an upload is never silent: a file the
+  // user chose always appears as a chip, even before its bytes have landed.
+  const pending = [];
+
+  function attachmentChip(a) {
+    const name = a.filename || a.name || 'attachment';
+    const remove = el(
+      'button',
+      {
+        type: 'button',
+        class: 'attach-remove',
+        title: `Remove ${name}`,
+        'aria-label': `Remove ${name}`,
+        onClick: () => removeAttachment(a),
+      },
+      icon('close', { size: 13 }),
+    );
+    return el(
+      'span',
+      { class: 'attach-chip' },
+      icon('paperclip', { size: 14 }),
+      el('span', { class: 'attach-name', text: name }),
+      el('span', { class: 'muted small', text: formatBytes(a.sizeBytes ?? a.size ?? 0) }),
+      remove,
+    );
+  }
+
+  function pendingChip(p) {
+    return el(
+      'span',
+      { class: 'attach-chip is-pending' },
+      el('span', { class: 'spinner', 'aria-hidden': 'true' }),
+      el('span', { class: 'attach-name', text: p.filename }),
+      el('span', { class: 'muted small', text: 'Uploading…' }),
+    );
+  }
 
   function renderAttachments() {
-    mount(
-      attachList,
-      ...attachments.map((a) =>
-        el(
-          'span',
-          { class: 'attach-chip' },
-          icon('paperclip', { size: 14 }),
-          el('span', { text: a.filename || a.name || 'attachment' }),
-          el('span', { class: 'muted small', text: formatBytes(a.sizeBytes ?? a.size ?? 0) }),
-        ),
-      ),
-    );
+    mount(attachList, ...attachments.map(attachmentChip), ...pending.map(pendingChip));
+  }
+
+  /** Remove one attachment, optimistically, restoring it if the server refuses. */
+  async function removeAttachment(a) {
+    const index = attachments.indexOf(a);
+    if (index >= 0) attachments.splice(index, 1);
+    renderAttachments();
+    if (!draftId) return;
+    try {
+      await api.mail.attachmentDelete({ draftId, attachmentId: a.id, mailboxId });
+    } catch (err) {
+      if (index >= 0) attachments.splice(index, 0, a);
+      renderAttachments();
+      toast(err.message, 'error');
+    }
   }
   renderAttachments();
 
@@ -734,26 +781,54 @@ export async function renderCompose(container, ctx) {
   }
 
   fileInput.addEventListener('change', async () => {
+    const files = [...fileInput.files];
+    fileInput.value = '';
+    if (!files.length) return;
+
+    const room = MAX_ATTACHMENTS - attachments.length - pending.length;
+    if (room <= 0) {
+      toast(`Up to ${MAX_ATTACHMENTS} attachments per message.`, 'error');
+      return;
+    }
+    const chosen = files.slice(0, room);
+    if (chosen.length < files.length) {
+      toast(`Only ${room} more allowed; ${files.length - chosen.length} file(s) skipped.`, 'error');
+    }
+
     try {
       // A draft must exist before an attachment can point at it.
       const id = draftId || (await saveDraft());
       // One at a time: a failed file must not discard the ones already stored.
-      for (const file of [...fileInput.files]) {
+      for (const file of chosen) {
+        const entry = { filename: file.name, size: file.size };
+        pending.push(entry);
+        renderAttachments();
         try {
           attachments.push(await uploadFile(id, file));
         } catch (err) {
           toast(err.message, 'error');
+        } finally {
+          const index = pending.indexOf(entry);
+          if (index >= 0) pending.splice(index, 1);
+          renderAttachments();
         }
-        renderAttachments();
       }
+    } catch (err) {
+      toast(err.message, 'error');
     } finally {
-      fileInput.value = '';
       statusNode.textContent = draftId ? `Draft saved ${new Date().toLocaleTimeString()}` : '';
     }
   });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    // Never send while an attachment is still uploading: the bytes would not be
+    // on the draft yet, so the recipient would get a message missing a file the
+    // sender believed they had attached.
+    if (pending.length) {
+      toast('Wait for attachments to finish uploading.', 'info');
+      return;
+    }
     sendBtn.disabled = true;
     sendBtn.textContent = 'Sending…';
     try {

@@ -78,8 +78,8 @@ export function assertSendable({ to, cc, bcc, replyTo, subject, html, text, atta
     });
   }
 
-  if (attachments.length > 10) {
-    throw new AppError(Codes.VALIDATION_ERROR, 'Up to 10 attachments per message.');
+  if (attachments.length > mailConfig.maxAttachments) {
+    throw new AppError(Codes.VALIDATION_ERROR, `Up to ${mailConfig.maxAttachments} attachments per message.`);
   }
   const attachmentBytes = attachments.reduce((total, file) => total + (file.size || file.data?.length || 0), 0);
   if (attachmentBytes > mailConfig.attachmentMaxBytes * 3) {

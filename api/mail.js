@@ -33,6 +33,7 @@ import {
   listStarred,
   listThread,
   markAllRead,
+  markAttachmentDeleted,
   moveToFolder,
   search,
   setHasAttachments,
@@ -63,6 +64,7 @@ import {
 } from '../packages/storage/attachments.js';
 import {
   attachmentCompleteSchema,
+  attachmentDeleteSchema,
   attachmentUploadUrlSchema,
   labelSchema,
   labelUpdateSchema,
@@ -652,12 +654,12 @@ const handlerSpec = {
       // much larger than a JSON body and has a different ceiling. No Zod schema:
       // the pipeline leaves ctx.body empty for multipart requests.
       body: 'multipart',
-      bodyLimit: mailConfig.attachmentMaxBytes * 10 + 65_536,
+      bodyLimit: mailConfig.attachmentMaxBytes * mailConfig.maxAttachments + 65_536,
       handler: async (ctx) => {
         const mailbox = await mailboxFor(ctx, { forSending: true });
 
         const { fields, files } = await parseMultipartBody(ctx.req, {
-          limit: mailConfig.attachmentMaxBytes * 10 + 65_536,
+          limit: mailConfig.attachmentMaxBytes * mailConfig.maxAttachments + 65_536,
         });
 
         const draftId = fields.draftId || null;
@@ -822,6 +824,45 @@ const handlerSpec = {
             sizeBytes: Number(row.size_bytes),
           },
         };
+      },
+    },
+
+    // ── Attachment removal (from a draft) ───────────────────────────────────
+    // A draft's attachments are rows plus stored objects. Removing one drops the
+    // row (soft) and the object, then clears `has_attachments` when the last one
+    // goes, so the list stops showing a paperclip that leads nowhere.
+    'attachment-delete': {
+      method: 'POST',
+      auth: 'session',
+      body: 'json',
+      schema: attachmentDeleteSchema,
+      handler: async (ctx) => {
+        const mailbox = await mailboxFor(ctx, { forSending: true });
+        const draft = await findOwned(ctx.body.draftId, mailbox.id);
+        if (!draft || draft.folder !== 'drafts') {
+          throw new AppError(Codes.NOT_FOUND, 'Draft not found.');
+        }
+
+        // Scoped to the draft, so a guessed attachment id cannot reach another
+        // message's file.
+        const attachment = await findAttachment(ctx.body.attachmentId, draft.id);
+        if (!attachment) throw new AppError(Codes.NOT_FOUND, 'Attachment not found.');
+
+        await markAttachmentDeleted(attachment.id, draft.id);
+        await deleteAttachments([attachment.storage_path]).catch((err) => {
+          // The row is already gone from the draft; a storage hiccup leaves an
+          // orphan to be reaped later rather than failing the removal.
+          logger.warn('Could not delete attachment object', {
+            attachmentId: attachment.id,
+            error: err.message,
+          });
+        });
+
+        const remaining = await listAttachments(draft.id);
+        if (remaining.length === 0) await setHasAttachments(draft.id, false);
+        await refreshMailboxUsage(mailbox.id).catch(() => {});
+
+        return { removed: attachment.id, remaining: remaining.length };
       },
     },
 

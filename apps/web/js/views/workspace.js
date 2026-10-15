@@ -168,15 +168,18 @@ export async function renderWorkspace(container) {
   }
 
   function renderTeam(context) {
-    const rows = (context.members || []).map((member) =>
-      el('div', { class: 'member-row' },
+    const meId = state.user?.id;
+    const rows = (context.members || []).map((member) => {
+      const isMe = member.userId && member.userId === meId;
+      const name = member.displayName || member.email;
+      return el('div', { class: 'member-row' },
         el('div', { class: 'member-body' },
-          el('span', { class: 'member-name', text: member.displayName || member.email }),
+          el('span', { class: 'member-name', text: isMe ? `${name} (you)` : name }),
           el('span', { class: 'muted small', text: member.email }),
         ),
         el('span', { class: 'pill', text: ROLE_LABEL[member.role] || 'Member' }),
-      ),
-    );
+      );
+    });
 
     mount(team,
       el('h3', { class: 'card-title', text: 'Team' }),
@@ -193,30 +196,38 @@ export async function renderWorkspace(container) {
 
     const cards = planList.map((p) => {
       const isCurrent = p.id === current;
-      const button = isCurrent
-        ? el('span', { class: 'pill', text: 'Current plan' })
-        : el('button', { class: 'btn btn-primary', text: 'Choose plan', disabled: !canManage, onClick: async () => {
-            // With a payment provider, a paid plan must go through checkout so the
-            // server grants it only after a verified payment. Without one
-            // (self-hosted) the plan switch is a direct update.
-            if (billingReady && p.id !== 'solo') {
-              try {
-                const result = await api.billing.checkout({
-                  workspaceId: activeId,
-                  planId: p.id,
-                  seats: 1,
-                  callbackUrl: billingReturnUrl(),
-                });
-                if (result?.actionUrl && result?.fields) submitCheckoutForm(result);
-              } catch (err) { toast(describeApiError(err), 'error'); }
-              return;
-            }
+      let button;
+      if (isCurrent) {
+        button = el('span', { class: 'pill', text: 'Current plan' });
+      } else if (!canManage) {
+        // A member cannot change the plan. Showing a disabled button reads as a
+        // broken control; a note explains why the control is absent. Only a
+        // platform administrator manages the organisation's subscription.
+        button = null;
+      } else {
+        button = el('button', { class: 'btn btn-primary', text: 'Choose plan', onClick: async () => {
+          // With a payment provider, a paid plan must go through checkout so the
+          // server grants it only after a verified payment. Without one
+          // (self-hosted) the plan switch is a direct update.
+          if (billingReady && p.id !== 'solo') {
             try {
-              await api.workspaces.update(activeId, { planId: p.id });
-              toast('Plan updated.', 'success');
-              await refresh();
+              const result = await api.billing.checkout({
+                workspaceId: activeId,
+                planId: p.id,
+                seats: 1,
+                callbackUrl: billingReturnUrl(),
+              });
+              if (result?.actionUrl && result?.fields) submitCheckoutForm(result);
             } catch (err) { toast(describeApiError(err), 'error'); }
-          } });
+            return;
+          }
+          try {
+            await api.workspaces.update(activeId, { planId: p.id });
+            toast('Plan updated.', 'success');
+            await refresh();
+          } catch (err) { toast(describeApiError(err), 'error'); }
+        } });
+      }
 
       return el('div', { class: `plan-card${isCurrent ? ' current' : ''}` },
         el('h4', { class: 'plan-name', text: p.name }),
@@ -241,6 +252,7 @@ export async function renderWorkspace(container) {
       el('p', { class: 'setting-note', text: subscription
         ? `${context.plan.name} · ${STATUS_LABEL[subscription.status] || subscription.status}${subscription.currentPeriodEnd ? ` · renews ${new Date(subscription.currentPeriodEnd).toLocaleDateString()}` : ''}`
         : `${context.plan.name} (free)` }),
+      canManage ? null : el('p', { class: 'setting-note', text: 'Only an organisation administrator can change the plan or billing.' }),
       usageLine('Mailboxes', context.usage?.mailboxes ?? 0, context.plan?.mailboxes),
       usageLine('Sends this month', context.usage?.sendsThisMonth ?? 0, context.plan?.monthlySends),
       usageLine('Rules', context.usage?.rules ?? 0, context.plan?.rules),

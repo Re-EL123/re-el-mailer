@@ -8,6 +8,8 @@
 
 import { z } from 'zod';
 
+import { mail as mailConfig } from '../shared/config.js';
+
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
 /** RFC 5322 address, validated (never "repaired"). */
@@ -86,7 +88,9 @@ export const attachmentSchema = z.object({
   inline: z.boolean().default(false),
 });
 
-export const attachmentsSchema = z.array(attachmentSchema).max(10, 'Up to 10 attachments per message.');
+export const attachmentsSchema = z
+  .array(attachmentSchema)
+  .max(mailConfig.maxAttachments, `Up to ${mailConfig.maxAttachments} attachments per message.`);
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
@@ -160,7 +164,7 @@ export const saveDraftSchema = z.object({
   subject: z.string().trim().max(200).default(''),
   html: htmlSchema.optional(),
   text: textSchema.optional(),
-  attachmentIds: z.array(idSchema).max(10).optional().default([]),
+  attachmentIds: z.array(idSchema).max(mailConfig.maxAttachments).optional().default([]),
   inReplyTo: z.string().trim().max(998).nullish(),
   references: z.array(z.string().trim().max(998)).max(40).optional().default([]),
   threadId: z.string().trim().max(64).nullish(),
@@ -190,7 +194,7 @@ export const attachmentUploadSchema = z.object({
       }),
     )
     .min(1, 'Choose at least one file.')
-    .max(10, 'Up to 10 files at a time.'),
+    .max(mailConfig.maxAttachments, `Up to ${mailConfig.maxAttachments} files at a time.`),
 });
 
 export const attachmentUploadUrlSchema = z.object({
@@ -207,6 +211,11 @@ export const attachmentCompleteSchema = z.object({
   attachmentId: idSchema,
   filename: z.string().trim().min(1).max(255),
   mimeType: z.string().trim().max(150).default('application/octet-stream'),
+});
+
+export const attachmentDeleteSchema = z.object({
+  draftId: idSchema,
+  attachmentId: idSchema,
 });
 
 export const labelSchema = z.object({

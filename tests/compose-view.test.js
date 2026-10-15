@@ -25,6 +25,7 @@ vi.mock('../apps/web/js/api.js', () => ({
       deleteDraft: vi.fn(async () => ({ ok: true })),
       attachmentUploadUrl: vi.fn(),
       attachmentComplete: vi.fn(),
+      attachmentDelete: vi.fn(async () => ({ removed: 'att_1', remaining: 0 })),
       labels: vi.fn(async () => ({ labels: [] })),
     },
     send: {
@@ -110,7 +111,7 @@ const { renderCompose } = await import('../apps/web/js/views/compose.js');
 const { el } = await import('../apps/web/js/ui.js');
 // The schemas are the contract. Asserting against them rather than against a
 // hand-written expectation is what makes this catch a rename on either side.
-const { attachmentUploadUrlSchema, attachmentCompleteSchema } = await import('../packages/validation/schemas.js');
+const { attachmentUploadUrlSchema, attachmentCompleteSchema, attachmentDeleteSchema } = await import('../packages/validation/schemas.js');
 
 const MB = 'mbx_1';
 
@@ -596,6 +597,7 @@ describe('attachments', () => {
     globalThis.fetch = realFetch;
     api.mail.attachmentUploadUrl.mockReset();
     api.mail.attachmentComplete.mockReset();
+    api.mail.attachmentDelete.mockReset();
   });
 
   it('sends the field names the upload schemas actually validate', async () => {
@@ -658,5 +660,94 @@ describe('attachments', () => {
     // The composer toasts rather than throwing, so the view is still usable.
     expect(container.querySelector('form')).toBeTruthy();
     expect(api.mail.attachmentComplete).not.toHaveBeenCalled();
+    // The pending chip is cleared on failure: the file is not silently gone.
+    expect(container.querySelector('.attach-chip.is-pending')).toBeNull();
+  });
+
+  it('shows a pending chip while a file is still uploading', async () => {
+    // A ticket that never resolves leaves the upload in flight, which is exactly
+    // the window in which the user must see that something is happening.
+    api.mail.attachmentUploadUrl.mockImplementation(() => new Promise(() => {}));
+
+    const container = host();
+    await renderCompose(container, { query: {} });
+    await waitFor('.attach-input', container);
+
+    const input = container.querySelector('.attach-input');
+    const file = new File(['pdf'], 'a.pdf', { type: 'application/pdf' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await waitFor('.attach-chip.is-pending', container);
+    expect(container.querySelector('.attach-chip.is-pending').textContent).toContain('a.pdf');
+    // The send is blocked while the bytes have not landed.
+    container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(api.send.send).not.toHaveBeenCalled();
+  });
+
+  it('removes an attachment from the draft when its chip button is clicked', async () => {
+    api.mail.get.mockResolvedValueOnce({
+      message: {
+        id: 'drf_1',
+        isDraft: true,
+        to: [],
+        cc: [],
+        bcc: [],
+        subject: 'Notes',
+        bodyHtml: '',
+        bodyText: '',
+        attachments: [{ id: 'att_1', filename: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 3 }],
+      },
+    });
+    api.mail.attachmentDelete.mockResolvedValueOnce({ removed: 'att_1', remaining: 0 });
+
+    const container = host();
+    await renderCompose(container, { query: { draft: 'drf_1', mailbox: MB } });
+    await waitFor('.attach-chip .attach-remove', container);
+
+    container.querySelector('.attach-chip .attach-remove').click();
+
+    await vi.waitFor(() => expect(api.mail.attachmentDelete).toHaveBeenCalled());
+    const args = api.mail.attachmentDelete.mock.calls[0][0];
+    // The payload must satisfy the shipped delete schema, or the server rejects it.
+    expect(() => attachmentDeleteSchema.parse(args)).not.toThrow();
+    expect(args).toMatchObject({ draftId: 'drf_1', attachmentId: 'att_1', mailboxId: MB });
+    await vi.waitFor(() => expect(container.querySelector('.attach-chip')).toBeNull());
+  });
+
+  it('refuses to add more files once the message is at the attachment limit', async () => {
+    const atLimit = Array.from({ length: 25 }, (_, i) => ({
+      id: `att_${i}`,
+      filename: `f${i}.pdf`,
+      mimeType: 'application/pdf',
+      sizeBytes: 3,
+    }));
+    api.mail.get.mockResolvedValueOnce({
+      message: {
+        id: 'drf_1',
+        isDraft: true,
+        to: [],
+        cc: [],
+        bcc: [],
+        subject: 'Notes',
+        bodyHtml: '',
+        bodyText: '',
+        attachments: atLimit,
+      },
+    });
+
+    const container = host();
+    await renderCompose(container, { query: { draft: 'drf_1', mailbox: MB } });
+    await waitFor('.attach-remove', container);
+    expect(container.querySelectorAll('.attach-chip').length).toBe(25);
+
+    const input = container.querySelector('.attach-input');
+    const file = new File(['x'], 'f.txt', { type: 'text/plain' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // At the limit nothing is uploaded and no chip is added.
+    expect(api.mail.attachmentUploadUrl).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('.attach-chip').length).toBe(25);
   });
 });

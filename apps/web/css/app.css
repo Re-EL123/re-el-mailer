@@ -174,11 +174,12 @@ textarea { resize: vertical; }
 
 /* ── Public / auth ───────────────────────────────────────────────────── */
 
-.public-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.public-shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
 .public-top { position: absolute; top: 12px; right: 12px; }
 
 .auth-wrap {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-content: center;
   gap: 22px;
@@ -200,7 +201,10 @@ textarea { resize: vertical; }
 
 /* ── Shell ───────────────────────────────────────────────────────────── */
 
-.shell { display: flex; flex-direction: column; height: 100vh; }
+/* 100dvh, not 100vh: on mobile the URL bar makes 100vh taller than the visible
+   area, so the bottom of a clipped view sat under the browser chrome. dvh tracks
+   the visible viewport; the vh line stays as a fallback for older engines. */
+.shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 
 .topbar {
   display: flex; align-items: center; gap: 12px;
@@ -494,6 +498,24 @@ textarea { resize: vertical; }
 .recipient-option.active, .recipient-option[aria-selected='true'] { background: var(--brand-050); }
 .attach-input { display: none; }
 .attach-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+/* A composer attachment: the file, its size, and a control to remove it. */
+.attach-chip .attach-remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--muted);
+  padding: 1px; margin-left: 2px; border-radius: 50%; cursor: pointer; line-height: 0;
+}
+.attach-chip .attach-remove:hover { color: var(--danger); background: var(--danger-bg); }
+.attach-chip.is-pending { color: var(--muted); }
+/* A pending upload reads as in-progress rather than as a finished attachment. */
+.spinner {
+  width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--brand);
+  animation: spinner-rotate .7s linear infinite;
+}
+@keyframes spinner-rotate { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 1.6s; }
+}
 .compose-attachments { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .schedule-wrap { display: inline-block; }
 .compose-actions { display: flex; gap: 8px; align-items: center; }
@@ -501,7 +523,13 @@ textarea { resize: vertical; }
 
 /* ── Settings / admin ────────────────────────────────────────────────── */
 
-.settings, .admin { height: 100%; overflow-y: auto; padding: 18px; max-width: 900px; }
+/* Page-style views. The view container clips (`.view { overflow: hidden }`), so
+   each of these must own its scrolling — without this the content below the fold
+   on the workspace and campaigns screens was unreachable. */
+.settings, .admin, .workspace, .campaigns {
+  height: 100%; overflow-y: auto; padding: 18px; max-width: 900px;
+  overscroll-behavior: contain;
+}
 .card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-lg); padding: 18px; margin-bottom: 16px;

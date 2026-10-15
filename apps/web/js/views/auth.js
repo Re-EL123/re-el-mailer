@@ -60,7 +60,6 @@ function loginView(container) {
       'div',
       { class: 'auth-links' },
       el('a', { href: '#/forgot', text: 'Forgot your password?' }),
-      el('a', { href: '#/', class: 'muted', text: 'Back to sign in' }),
     ),
   );
 
