@@ -180,24 +180,31 @@ textarea { resize: vertical; }
 .auth-wrap {
   min-height: 100vh;
   min-height: 100dvh;
-  display: grid;
-  place-content: center;
+  width: 100%;
+  max-width: 440px;
+  margin: 0 auto;
+  /* Flex column, not a centred grid: a centred grid sizes its single track to the
+     content's max-content width, so the card collapsed to ~290px instead of
+     filling the wrapper — cramped fields and wrapped copy. A stretched flex
+     column makes the card span the wrapper while still centring it as a whole. */
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
   gap: 22px;
   padding: 24px;
-  max-width: 420px;
-  margin: 0 auto;
 }
 .auth-brand { text-align: center; }
 .auth-title { margin: 12px 0 2px; font-size: 26px; }
 .auth-tagline { color: var(--muted); margin: 0; }
 .auth-form {
+  width: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 22px;
+  padding: 28px;
   box-shadow: var(--shadow);
 }
-.auth-links { display: flex; justify-content: space-between; font-size: 14px; margin-top: 6px; }
+.auth-links { display: flex; justify-content: center; font-size: 14px; margin-top: 6px; }
 
 /* ── Shell ───────────────────────────────────────────────────────────── */
 
