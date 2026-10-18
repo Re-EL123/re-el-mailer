@@ -236,15 +236,31 @@ describe('buildReplyDraft', () => {
     expect(draft.cc).toEqual([]);
   });
 
-  it('includes the other recipients on reply-all, without duplicating the sender', () => {
-    const draft = buildReplyDraft(message, { mode: 'all' });
-    expect(draft.to).toContain('watcher@example.com');
-    expect(draft.to.filter((a) => a === 'them@example.com')).toHaveLength(1);
+  it('keeps the sender on To and the other recipients on Cc for reply-all', () => {
+    const draft = buildReplyDraft(message, { mode: 'all', excludeAddress: 'me@re-el.co.za' });
+    expect(draft.to).toEqual(['them@example.com']);
+    expect(draft.cc).toEqual(['watcher@example.com']);
   });
 
-  it('excludes the replying mailbox on reply-all', () => {
+  it('does not reply-all to a message with no other recipients', () => {
+    const draft = buildReplyDraft({ ...message, to_emails: ['me@re-el.co.za'], cc_emails: [] }, {
+      mode: 'all',
+      excludeAddress: 'me@re-el.co.za',
+    });
+    expect(draft.to).toEqual(['them@example.com']);
+    expect(draft.cc).toEqual([]);
+  });
+
+  it('excludes the replying mailbox from both headers on reply-all', () => {
     const draft = buildReplyDraft(message, { mode: 'all', excludeAddress: 'me@re-el.co.za' });
     expect(draft.to).not.toContain('me@re-el.co.za');
+    expect(draft.cc).not.toContain('me@re-el.co.za');
+  });
+
+  it('replies to the original recipients when answering your own message', () => {
+    const own = { ...message, from_email: 'me@re-el.co.za', to_emails: ['them@example.com'] };
+    const draft = buildReplyDraft(own, { excludeAddress: 'me@re-el.co.za' });
+    expect(draft.to).toEqual(['them@example.com']);
   });
 
   it('prefixes the subject with Re: and strips existing prefixes', () => {
@@ -254,6 +270,18 @@ describe('buildReplyDraft', () => {
     // Re/Fw/Fwd prefixes are all normalised away before the single Re: is added.
     expect(buildReplyDraft({ ...message, subject: 'Fwd: Original' }).subject).toBe('Re: Original');
     expect(buildReplyDraft({ ...message, subject: 'Re[2]: Original' }).subject).toBe('Re: Original');
+  });
+
+  it('does not double the Re: prefix on reply-all', () => {
+    const draft = buildReplyDraft({ ...message, subject: 'Re: Original' }, { mode: 'all' });
+    expect(draft.subject).toBe('Re: Original');
+  });
+
+  it('quotes the body with an attribution and > markers', () => {
+    const draft = buildReplyDraft({ ...message, from_name: 'Them', received_at: '2026-01-02T03:04:05.000Z' });
+    expect(draft.quotedText).toContain('Them <them@example.com> wrote:');
+    expect(draft.quotedText).toContain('> Original body');
+    expect(draft.quotedText).toContain('2026');
   });
 
   it('quotes the body and carries the thread headers', () => {

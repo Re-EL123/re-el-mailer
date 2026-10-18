@@ -124,6 +124,29 @@ describe('assignment', () => {
   });
 });
 
+describe('reply buttons', () => {
+  it('opens the composer in reply-all mode for the message being read', async () => {
+    const container = host();
+    await renderMessage(container, { params: ['msg_1'], query: { mailbox: MB } });
+    await waitFor('.reader-toolbar', container);
+
+    const button = container.querySelector('.reader-toolbar [aria-label="Reply all"]');
+    expect(button).not.toBeNull();
+    button.click();
+    expect(window.location.hash).toBe(`#/compose?reply=msg_1&mode=all&mailbox=${MB}`);
+  });
+
+  it('opens a plain reply without the reply-all mode', async () => {
+    const container = host();
+    await renderMessage(container, { params: ['msg_1'], query: { mailbox: MB } });
+    await waitFor('.reader-toolbar', container);
+
+    // The reply-all button must not be the one the plain reply resolves to.
+    container.querySelector('.reader-toolbar [aria-label="Reply"]').click();
+    expect(window.location.hash).toBe(`#/compose?reply=msg_1&mailbox=${MB}`);
+  });
+});
+
 describe('notes', () => {
   it('lists the notes already on the message', async () => {
     const container = host();

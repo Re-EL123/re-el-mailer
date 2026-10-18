@@ -444,6 +444,28 @@ describe('resuming a draft', () => {
     expect(area.value).toBe('Hello draft');
   });
 
+  it('opens a reply with its quoted history as line-preserving paragraphs', async () => {
+    api.send.reply.mockResolvedValueOnce({
+      draft: {
+        to: ['bob@example.com'],
+        cc: [],
+        bcc: [],
+        subject: 'Re: Quarterly numbers',
+        quotedText: 'On Mon, Bob wrote:\n> Line one\n> Line two',
+      },
+    });
+    const container = host();
+    await renderCompose(container, { query: { reply: 'msg_1', mailbox: MB } });
+    await waitFor('.editor-surface', container);
+
+    // The editor parses `content` as HTML, so a quoted body seeded from the API
+    // as plain text would collapse onto one line. It has to arrive as paragraphs.
+    const content = editorInstance.getText();
+    expect(content).toContain('<p>');
+    expect(content).not.toContain('\n');
+    expect(content).toContain('&gt; Line one');
+  });
+
   it('refuses to load a message that is not a draft', async () => {
     api.mail.get.mockResolvedValueOnce({
       message: { id: 'msg_9', isDraft: false, to: ['alice@example.com'], subject: 'Sent mail' },

@@ -244,8 +244,10 @@ export async function renderMailList(container, ctx) {
   const actionsNode = el('div', { class: 'list-actions', hidden: true });
   const actionsCount = el('span', { class: 'list-actions-count' });
 
-  const title =
-    folderParam === 'starred'
+  const searching = Boolean(ctx.query.q);
+  const title = searching
+    ? 'Search results'
+    : folderParam === 'starred'
       ? 'Starred'
       : labelId
         ? (state.labels || []).find((l) => l.id === labelId)?.name || 'Label'
@@ -253,12 +255,18 @@ export async function renderMailList(container, ctx) {
 
   // Named after the folder/label so a screen reader user arriving here by
   // keyboard hears which list they are in, not just "list".
-  const listNode = el('div', { class: 'msg-list', role: 'list', 'aria-label': `${title} messages` });
+  // The scroll container holds the rows and the paging footer, so the footer
+  // sits at the end of the list and only comes into view when the user reaches
+  // it. The role="list" is on the rows wrapper: a load-more button directly in a
+  // list would be announced as a list item.
+  const rowsNode = el('div', { class: 'msg-rows', role: 'list', 'aria-label': `${title} messages` });
+  const footerNode = el('div', { class: 'list-footer' });
+  const listNode = el('div', { class: 'msg-list' }, rowsNode, footerNode);
 
   const searchInput = el('input', {
     type: 'search',
     class: 'search',
-    placeholder: `Search in ${title}…`,
+    placeholder: searching ? 'Search mail…' : `Search in ${title}…`,
     value: ctx.query.q || '',
     'aria-label': 'Search mail',
   });
@@ -399,54 +407,132 @@ export async function renderMailList(container, ctx) {
     r: () => refresh(),
   });
 
+  const pageSize = Math.min(100, Math.max(10, Number(state.pageSize) || 30));
   let messages = [];
+  let hasMore = false;
+  let isLoadingMore = false;
+  let searchTotal = null;
+
   function renderRows() {
+    rowsNode.removeAttribute('aria-busy');
     if (messages.length === 0) {
-      mount(listNode, el('div', { class: 'empty', text: `No messages in ${title}.` }));
+      mount(rowsNode, el('div', { class: 'empty', text: `No messages in ${title}.` }));
       return;
     }
-    mount(listNode, ...messages.map((msg) => messageRow(msg, { selected: selected.has(msg.id), onSelect, mailboxId })));
+    mount(rowsNode, ...messages.map((msg) => messageRow(msg, { selected: selected.has(msg.id), onSelect, mailboxId })));
   }
 
   /**
    * Placeholder rows while the list loads.
    *
    * These match the real row's dimensions, so the sidebar and header are already
-   * in place and nothing shifts when data arrives. The count tracks state.pageSize
+   * in place and nothing shifts when data arrives. The count tracks the page size
    * so a page that ends up full does not visibly extend at the end.
    */
   function showSkeletons() {
-    const host = el('div', {
-      class: 'msg-list',
-      role: 'list',
-      'aria-label': `${title} messages`,
-      // One announcement for the whole list, not one per placeholder row.
-      'aria-busy': 'true',
-    });
-    const skeleton = skeletonList({ rows: Math.min(state.pageSize || 30, 8) });
-    for (const row of skeleton.children) host.append(row);
-    mount(listNode, host);
+    // One announcement for the whole list, not one per placeholder row.
+    rowsNode.setAttribute('aria-busy', 'true');
+    mount(rowsNode, ...Array.from(skeletonList({ rows: Math.min(pageSize, 8) }).children));
   }
 
-  async function load() {
+  /** Total messages in this view when the API reports one, else null. */
+  function knownTotal() {
+    if (searching) return searchTotal;
+    if (labelId) return null;
+    if (folder === 'starred') return state.counts?.starred ?? null;
+    return state.counts?.folders?.[folder] ?? null;
+  }
+
+  /**
+   * Whether another page exists.
+   *
+   * `list` states it outright; `search` reports a total; the label endpoint
+   * reports neither, so a full page is the only signal that more may exist.
+   */
+  function moreAvailable(data, received, offset) {
+    if (typeof data.hasMore === 'boolean') return data.hasMore;
+    if (typeof data.total === 'number') return offset + received < data.total;
+    return received === pageSize;
+  }
+
+  function fetchPage(offset) {
+    if (searching) return api.mail.search(ctx.query.q, { mailboxId, limit: pageSize, offset });
+    if (labelId) return api.mail.messagesByLabel(labelId, { mailboxId, limit: pageSize, offset });
+    return api.mail.list({ folder, mailboxId, limit: pageSize, offset });
+  }
+
+  function renderFooter() {
+    if (isLoadingMore) {
+      mount(footerNode, el('div', { class: 'list-more', role: 'status' },
+        el('span', { class: 'spinner', 'aria-hidden': 'true' }),
+        el('span', { class: 'muted small', text: 'Loading more…' })));
+      return;
+    }
+    if (hasMore) {
+      const known = knownTotal();
+      mount(footerNode, el('div', { class: 'list-more' },
+        el('button', { class: 'btn', type: 'button', text: 'Load more', onClick: loadMore }),
+        el('span', { class: 'muted small', text: known != null ? `Showing ${messages.length} of ${known}` : `Showing ${messages.length}` })));
+      return;
+    }
+    // Nothing left to load. Only say so once the user has paged past the first
+    // screen, so a short list does not carry a line that states the obvious.
+    if (messages.length > pageSize) {
+      mount(footerNode, el('p', { class: 'muted small list-more-end', text: `End of ${title}.` }));
+    } else {
+      mount(footerNode);
+    }
+  }
+
+  async function loadMore() {
+    if (isLoadingMore || !hasMore) return;
+    isLoadingMore = true;
+    renderFooter();
+    try {
+      const offset = messages.length;
+      const data = await fetchPage(offset);
+      const next = data.messages || [];
+      messages = messages.concat(next);
+      hasMore = moreAvailable(data, next.length, offset);
+      renderRows();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      isLoadingMore = false;
+      renderFooter();
+    }
+  }
+
+  // Load the next page automatically as the footer scrolls into view. The button
+  // stays for environments without IntersectionObserver and for anyone who would
+  // rather ask for more explicitly.
+  let moreObserver = null;
+  function observeMore() {
+    if (typeof IntersectionObserver === 'undefined') return;
+    moreObserver?.disconnect();
+    moreObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting) && hasMore && !isLoadingMore) loadMore();
+    }, { rootMargin: '200px' });
+    moreObserver.observe(footerNode);
+  }
+
+  async function loadFirstPage() {
     showSkeletons();
     try {
-      let data;
-      if (ctx.query.q) {
-        data = await api.mail.search(ctx.query.q, { mailboxId, limit: state.pageSize });
-        messages = data.messages || [];
-      } else if (labelId) {
-        data = await api.mail.messagesByLabel(labelId, { mailboxId, limit: state.pageSize });
-        messages = data.messages || [];
-      } else {
-        data = await api.mail.list({ folder, mailboxId, limit: state.pageSize });
-        messages = data.messages || [];
+      const data = await fetchPage(0);
+      messages = data.messages || [];
+      searchTotal = searching && typeof data.total === 'number' ? data.total : null;
+      hasMore = moreAvailable(data, messages.length, 0);
+      if (!searching && !labelId) {
         setState({ counts: { folders: data.counts, inboxUnread: data.inboxUnread, starred: data.starred } });
       }
       renderRows();
+      renderFooter();
       renderSidebar();
+      observeMore();
     } catch (err) {
-      mount(listNode, el('div', { class: 'empty', text: err.message }));
+      rowsNode.removeAttribute('aria-busy');
+      mount(rowsNode, el('div', { class: 'empty', text: err.message }));
     }
   }
 
@@ -465,11 +551,12 @@ export async function renderMailList(container, ctx) {
 
   mount(container, el('div', { class: 'mail-layout' }, sidebarNode, el('div', { class: 'mail-main' }, headerNode, actionsNode, listNode)));
   renderSidebar();
-  await load();
+  await loadFirstPage();
 
   // The router runs the returned function before the next render, so these
   // bindings cannot outlive the view they act on.
   return () => {
     popShortcuts();
+    moreObserver?.disconnect();
   };
 }

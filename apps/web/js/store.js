@@ -150,10 +150,19 @@ export function adoptSession(data) {
   // Never clear a token we already hold: a payload that carries none (the
   // ?action=session response) must leave the existing one in place.
   if (session.accessToken) setAccessToken(session.accessToken);
+  // How many messages a list loads at a time is a per-account preference. The
+  // session carries it, so apply it here rather than leaving every list on the
+  // default regardless of what the user chose in settings.
+  const preferredPageSize = Number(data.user?.preferences?.pageSize);
+  const pageSize =
+    Number.isFinite(preferredPageSize) && preferredPageSize >= 10 && preferredPageSize <= 100
+      ? preferredPageSize
+      : state.pageSize;
   setState({
     user: data.user,
     session,
     mailboxes,
+    pageSize,
     activeMailboxId:
       state.activeMailboxId && mailboxes.some((mb) => mb.id === state.activeMailboxId)
         ? state.activeMailboxId

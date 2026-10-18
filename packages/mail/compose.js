@@ -202,43 +202,79 @@ export function formatAddressList(addresses) {
 /**
  * Pre-fill a reply.
  *
- * Default is reply to the sender only: replying to a long chain is a spam-filter
- * trigger and is rarely what the sender meant.
+ * A plain reply goes to the sender only: replying to a long chain is a spam-filter
+ * trigger and is rarely what the sender meant. A reply-all keeps the sender on To
+ * and moves everyone else the message reached — the original To and Cc — to Cc,
+ * which is what a mail client does and what keeps the thread's participants on
+ * the message without burying the person being answered.
  *
  * @param {object} message the original message row
  * @param {'sender'|'all'|'replyAll'} mode
  * @param {string} [excludeAddress] the replying mailbox's own address, dropped
- *   from a reply-all so the user doesn't mail themselves
+ *   from both headers so the user doesn't mail themselves
  */
 export function buildReplyDraft(message, { mode = 'sender', excludeAddress = null } = {}) {
-  const from = message.from_email;
-  const to = [from].filter(Boolean);
+  const from = message.from_email ? String(message.from_email).toLowerCase() : null;
+  const self = excludeAddress ? String(excludeAddress).toLowerCase() : null;
+  const originalTo = (message.to_emails || [])
+    .map((address) => String(address || '').toLowerCase())
+    .filter((address) => address && address !== self);
+  const originalCc = (message.cc_emails || [])
+    .map((address) => String(address || '').toLowerCase())
+    .filter((address) => address && address !== self);
 
+  // The sender is who a plain reply answers. When that is the replying mailbox
+  // itself — replying to a message you sent — answer the people it went to
+  // instead, so the composer never opens with an empty recipient field.
+  const sender = from && from !== self ? from : null;
+  const to = normalizeRecipients(sender ? [sender] : originalTo);
+
+  // Reply-all keeps everyone else in Cc: the original recipients minus the
+  // sender (already on To) and the replying mailbox.
+  const cc = [];
   if (mode === 'all') {
-    const drop = new Set(
-      [from, excludeAddress]
-        .filter(Boolean)
-        .map((address) => String(address).toLowerCase()),
-    );
-    const others = [...(message.cc_emails || []), ...(message.to_emails || [])]
-      .map((address) => String(address || '').toLowerCase())
-      .filter((address) => address && !drop.has(address));
-    to.push(...normalizeRecipients(others));
+    const drop = new Set([...to, self].filter(Boolean));
+    cc.push(...normalizeRecipients([...originalTo, ...originalCc].filter((address) => !drop.has(address))));
   }
 
+  // `baseSubject` strips every Re/Fw/Fwd prefix, so the single Re: this adds can
+  // never become "Re: Re:" on a message that already carries one.
   const subject = baseSubject(message.subject || '');
+  const body = message.body_text || htmlToText(message.body_html || '');
 
   return {
-    to: [...new Set(to)],
-    cc: [],
+    to,
+    cc,
     bcc: [],
-    subject: mode === 'all' && /(^|\s)re:/i.test(message.subject || '') ? `Re: ${message.subject}` : `Re: ${subject}`,
-    // Quote the plain-text body; the caller re-renders it through the editor.
-    quotedText: message.body_text || htmlToText(message.body_html || ''),
+    subject: `Re: ${subject}`,
+    quotedText: quoteReply(message, body),
     inReplyTo: message.message_id || null,
     references: [...(message.references || []), message.message_id].filter(Boolean),
     threadId: message.thread_id || null,
   };
+}
+
+/**
+ * The quoted history of a reply: an attribution line, then the original body
+ * quoted with `>`. Both are plain text because the composer seeds the editor
+ * with it, and a body that arrived as HTML is reduced to text rather than
+ * re-emitted, which would let a sender's markup into the reply.
+ */
+function quoteReply(message, body) {
+  const sender = message.from_name
+    ? `${message.from_name} <${message.from_email || ''}>`
+    : message.from_email || '';
+  const when = message.received_at || message.sent_at || message.created_at;
+  const ts = when ? Date.parse(when) : NaN;
+
+  const quoted = String(body || '')
+    .split('\n')
+    .map((line) => (line ? `> ${line}` : '>'))
+    .join('\n');
+
+  if (!sender) return quoted;
+  const on = Number.isNaN(ts) ? 'On' : `On ${new Date(ts).toUTCString()}`;
+  return `${on}, ${sender} wrote:\n${quoted}`;
 }
 
 /** Pre-fill a forward. */

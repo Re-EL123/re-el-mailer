@@ -667,6 +667,7 @@ export async function renderMessage(container, ctx) {
             await api.mail.trash([msg.id], mailboxId); navigate('inbox');
           } }, icon('trash')),
           el('button', { class: 'icon-btn', title: 'Reply', 'aria-label': 'Reply', onClick: () => navigate(`compose?reply=${msg.id}&mailbox=${mailboxId}`) }, icon('reply')),
+          el('button', { class: 'icon-btn', title: 'Reply all', 'aria-label': 'Reply all', onClick: () => navigate(`compose?reply=${msg.id}&mode=all&mailbox=${mailboxId}`) }, icon('replyAll')),
           el('button', { class: 'icon-btn', title: 'Forward', 'aria-label': 'Forward', onClick: () => navigate(`compose?forward=${msg.id}&mailbox=${mailboxId}`) }, icon('forward')),
           // Re-fetches just this message. Worth its own control because the
           // reader is the one place where staleness is invisible: a reply that

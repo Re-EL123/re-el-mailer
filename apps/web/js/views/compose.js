@@ -557,7 +557,10 @@ export async function renderCompose(container, ctx) {
         const { createEditor } = await import('../vendor/editor.bundle.js');
 
       editor = await createEditor(editorHost, {
-        content: initialHtml || plainText || seed.text || '',
+        // The editor parses `content` as HTML, so a seeded plain-text body (a
+        // reply's quoted history) has to be converted first — passing it raw
+        // collapses every newline and the quote arrives as one run-on line.
+        content: initialHtml || textToHtml(plainText),
         placeholder: 'Write your message…',
         onChange: (text) => setPlainText(text),
       });
@@ -887,4 +890,20 @@ function escapeHtml(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * Turn a plain-text body into HTML the editor can open without mangling it.
+ *
+ * One paragraph per line, so a quoted reply keeps its shape; a blank line becomes
+ * an empty paragraph rather than disappearing. Every line is escaped, so a body
+ * that contains markup is shown, not executed.
+ */
+function textToHtml(value) {
+  const text = String(value ?? '');
+  if (!text) return '';
+  return text
+    .split('\n')
+    .map((line) => (line ? `<p>${escapeHtml(line)}</p>` : '<p></p>'))
+    .join('');
 }

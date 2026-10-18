@@ -292,6 +292,18 @@ textarea { resize: vertical; }
 
 .msg-list { overflow-y: auto; flex: 1; }
 
+.msg-rows { display: block; }
+
+/* Paging controls sit at the end of the scrollable list, not pinned below it,
+   so the auto-load sentinel only comes into view once the rows are exhausted. */
+.list-footer { display: block; }
+.list-footer:empty { display: none; }
+.list-more {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface);
+}
+.list-more-end { text-align: center; padding: 12px 16px; margin: 0; }
+
 .msg-row {
   display: flex; align-items: flex-start; gap: 10px;
   padding: var(--row-gap) 16px;

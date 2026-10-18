@@ -103,6 +103,23 @@ describe('adoptSession', () => {
     store.adoptSession(session);
     expect(seen).toContain('usr_1');
   });
+
+  it('applies the account\u2019s page-size preference', async () => {
+    const store = await loadStore();
+    store.adoptSession({ ...session, user: { ...session.user, preferences: { pageSize: 50 } } });
+    expect(store.state.pageSize).toBe(50);
+  });
+
+  it('keeps the default when the preference is absent or out of range', async () => {
+    const store = await loadStore();
+    store.adoptSession(session);
+    expect(store.state.pageSize).toBe(30);
+
+    // A value outside the schema bounds is ignored rather than trusted: a stored
+    // 0 would otherwise ask the list for nothing at all.
+    store.adoptSession({ ...session, user: { ...session.user, preferences: { pageSize: 0 } } });
+    expect(store.state.pageSize).toBe(30);
+  });
 });
 
 describe('loadSession', () => {
