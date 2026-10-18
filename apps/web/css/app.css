@@ -1,7 +1,14 @@
 /* Re-EL Mailer — design tokens + layout.
    Light and dark are driven by [data-theme] on <html>. */
 
+/* `color-scheme` tells the browser which palette to use for the controls it
+   draws itself (buttons, checkboxes, the caret, select popups, scrollbars).
+   It must match [data-theme], not `prefers-color-scheme`: the theme is an app
+   setting, so a light-themed page on a dark-mode OS otherwise gets dark native
+   controls — white glyphs and borders — on the light surface behind them. */
+
 :root {
+  color-scheme: light;
   --brand: #21396a;
   --brand-600: #2d4a86;
   --brand-050: #eef2fb;
@@ -20,6 +27,7 @@
 }
 
 [data-theme='dark'] {
+  color-scheme: dark;
   --brand: #7ea2f0;
   --brand-600: #9ab8f5;
   --brand-050: #1a2540;
@@ -667,7 +675,7 @@ textarea { resize: vertical; }
 .plan-features { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
 
 .admin-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-.admin-tab-btn { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 6px 14px; cursor: pointer; font: inherit; }
+.admin-tab-btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 6px 14px; cursor: pointer; font: inherit; }
 .admin-tab-btn.active { background: var(--brand); color: #fff; border-color: var(--brand); }
 
 /* Create/edit rows in the admin console, and the scrollable route/audit panes. */
