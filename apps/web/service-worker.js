@@ -136,8 +136,16 @@ self.addEventListener('fetch', (event) => {
 
   // Network-first for the shell. Staleness here is not a cosmetic risk: the app
   // and the API would disagree, and the resulting bugs read as server faults.
+  //
+  // `no-cache` revalidates instead of trusting the HTTP cache. Pages serves the
+  // shell with `max-age=600`, so a plain network-first fetch reads the previous
+  // deploy's CSS and JS straight out of the browser cache for up to ten minutes
+  // after a deploy — the file is correct on the server and still wrong in the
+  // tab. A navigation request's mode is 'navigate', which the Request constructor
+  // rejects whenever an init is supplied, so only subresources get the override.
+  const init = request.mode === 'navigate' ? undefined : { cache: 'no-cache' };
   event.respondWith(
-    fetch(request)
+    fetch(request, init)
       .then((response) => {
         if (response.ok && currentVersion) {
           const copy = response.clone();

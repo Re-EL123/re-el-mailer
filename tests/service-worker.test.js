@@ -235,4 +235,29 @@ describe('service worker freshness', () => {
     // Mail must always be fetched live; a stale list would be shown as current.
     expect(handled).toBe(false);
   });
+
+  it('revalidates shell subresources so a deploy is not masked by the HTTP cache', async () => {
+    await bootWorker({ contents: { 'css/app.css': 'NEW CSS' } });
+    const inits = [];
+    vi.stubGlobal('fetch', vi.fn(async (request, init) => {
+      inits.push(init);
+      return new Response('NEW CSS', { status: 200 });
+    }));
+
+    await handleFetch(`${ORIGIN}/css/app.css`);
+    // Without this, Pages' `max-age=600` re-serves the previous deploy's CSS.
+    expect(inits.at(-1)).toEqual({ cache: 'no-cache' });
+  });
+
+  it('sends no init for a navigation, which the Request constructor would reject', async () => {
+    await bootWorker({ contents: { 'index.html': '<html>shell</html>' } });
+    const inits = [];
+    vi.stubGlobal('fetch', vi.fn(async (request, init) => {
+      inits.push(init);
+      return new Response('<html>shell</html>', { status: 200 });
+    }));
+
+    await handleFetch(`${ORIGIN}/inbox`, { mode: 'navigate' });
+    expect(inits.at(-1)).toBeUndefined();
+  });
 });
