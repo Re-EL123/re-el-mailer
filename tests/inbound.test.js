@@ -99,6 +99,48 @@ describe('shouldMarkSpam', () => {
   });
 });
 
+describe('provider spam verdict', () => {
+  /** A minimal inbound event carrying only the headers under test. */
+  function event(headers) {
+    return {
+      data: {
+        from: 'sender@example.com',
+        to: ['info@re-el.co.za'],
+        subject: 'Hello',
+        text: 'Body',
+        headers,
+      },
+    };
+  }
+
+  it('turns an SES FAIL into a spam verdict the webhook acts on', () => {
+    const message = normalizeInbound(event({ 'x-ses-spam-verdict': 'FAIL' }));
+    expect(message.spamVerdict).toBe('spam');
+    expect(shouldMarkSpam(message)).toBe(true);
+  });
+
+  it('treats PASS as a not-spam verdict', () => {
+    const message = normalizeInbound(event({ 'x-ses-spam-verdict': 'PASS' }));
+    expect(message.spamVerdict).toBe('not-spam');
+    expect(shouldMarkSpam(message)).toBe(false);
+  });
+
+  it('does not treat GRAY (unscanned) as spam', () => {
+    const message = normalizeInbound(event({ 'x-ses-spam-verdict': 'GRAY' }));
+    expect(message.spamVerdict).toBeNull();
+    expect(shouldMarkSpam(message)).toBe(false);
+  });
+
+  it('understands x-spam-status aliases', () => {
+    expect(normalizeInbound(event({ 'x-spam-status': 'Yes' })).spamVerdict).toBe('spam');
+    expect(normalizeInbound(event({ 'x-spam-status': 'No' })).spamVerdict).toBe('not-spam');
+  });
+
+  it('leaves the verdict unknown when the provider sends no headers', () => {
+    expect(normalizeInbound(event({})).spamVerdict).toBeNull();
+  });
+});
+
 describe('shouldAutoRead', () => {
   it('is true when the receiving mailbox has auto_read enabled', () => {
     expect(shouldAutoRead({ fromEmail: 'a@b.co' }, true)).toBe(true);

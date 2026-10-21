@@ -461,12 +461,13 @@ stable
 as $$
   select m.folder,
          count(*)                                              as total,
-         count(*) filter (where not m.is_read and not m.is_deleted) as unread,
-         count(*) filter (where m.is_starred)                  as starred
+         count(*) filter (where not m.is_read)                 as unread,
+         -- Starred stays consistent with listStarred(), which never surfaces
+         -- the deleted views (trash/spam). Totals, by contrast, must include
+         -- them: the folder list pages through every row it counts.
+         count(*) filter (where m.is_starred and not m.is_deleted) as starred
   from public.messages m
   where m.mailbox_id = p_mailbox_id
-    and not m.is_deleted
-    and m.folder <> 'spam'
   group by m.folder;
 $$;
 

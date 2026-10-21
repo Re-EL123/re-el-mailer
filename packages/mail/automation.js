@@ -35,7 +35,7 @@ import {
   reclaimStaleJobs,
   refreshCampaignCounts,
 } from '../db/automation.js';
-import { createMessage, update as updateMessage } from '../db/messages.js';
+import { createMessage, moveToFolder, update as updateMessage } from '../db/messages.js';
 import { sendEmail } from './resend.js';
 import { buildSendPayload, formatFrom } from './compose.js';
 import { evaluateRules } from './rules.js';
@@ -299,17 +299,19 @@ async function applyAction(action, { mailbox, message }) {
     case 'folder': {
       const folder = String(action.folder || '').toLowerCase();
       if (['inbox', 'sent', 'drafts', 'archive', 'trash', 'spam'].includes(folder)) {
-        await updateMessage(messageId, mailbox.id, { folder });
+        // Route every folder change through moveToFolder: it owns the
+        // trash/spam -> is_deleted rule that retention and search rely on.
+        await moveToFolder([messageId], mailbox.id, folder);
       }
       return { type, folder };
     }
 
     case 'archive':
-      await updateMessage(messageId, mailbox.id, { folder: 'archive' });
+      await moveToFolder([messageId], mailbox.id, 'archive');
       return { type };
 
     case 'trash':
-      await updateMessage(messageId, mailbox.id, { folder: 'trash' });
+      await moveToFolder([messageId], mailbox.id, 'trash');
       return { type };
 
     case 'star':

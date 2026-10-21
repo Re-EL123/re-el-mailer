@@ -85,7 +85,7 @@ describe('list actions', () => {
     const node = container.querySelector('.list-actions');
     expect(node.hidden).toBe(false);
     expect(node.querySelector('.list-actions-count').textContent).toBe('1 selected');
-    expect([...node.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Star', 'Archive', 'Trash', 'Clear']);
+    expect([...node.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Star', 'Archive', 'Trash', 'Mark spam', 'Clear']);
   });
 
   it('reselecting after a clear still shows the buttons', async () => {
@@ -102,7 +102,7 @@ describe('list actions', () => {
     expect(container.querySelector('.list-actions').hidden).toBe(true);
     select();
     expect(container.querySelector('.list-actions-count').textContent).toBe('1 selected');
-    expect([...container.querySelectorAll('.list-actions button')].map((b) => b.textContent)).toEqual(['Star', 'Archive', 'Trash', 'Clear']);
+    expect([...container.querySelectorAll('.list-actions button')].map((b) => b.textContent)).toEqual(['Star', 'Archive', 'Trash', 'Mark spam', 'Clear']);
   });
 
   it('clicking an action with nothing selected does not call the API', async () => {
@@ -168,5 +168,42 @@ describe('list actions', () => {
     const buttons = [...container.querySelectorAll('.list-actions button')].map((b) => b.textContent);
     expect(buttons).toContain('Star');
     expect(buttons).toContain('Archive');
+  });
+
+  it('Inbox offers Mark spam, which moves the selection to spam', async () => {
+    const container = await render([message()]);
+    const box = await waitFor('.msg-check', container);
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const mark = [...container.querySelectorAll('.list-actions button')].find((b) => b.textContent === 'Mark spam');
+    mark.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const call = fetchStub.mock.calls.find(([url]) => String(url).includes('action=move'));
+    expect(call).toBeTruthy();
+    expect(JSON.parse(call[1].body)).toEqual({ ids: ['msg_1'], folder: 'spam' });
+  });
+
+  it('Spam offers Not spam, hides Star, and moves the selection to inbox', async () => {
+    const container = await render([message({ folder: 'spam' })], 'spam');
+    const box = await waitFor('.msg-check', container);
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const buttons = [...container.querySelectorAll('.list-actions button')].map((b) => b.textContent);
+    expect(buttons).toContain('Not spam');
+    expect(buttons).toContain('Delete forever');
+    // Starred excludes the deleted views, so starring here would go nowhere.
+    expect(buttons).not.toContain('Star');
+    expect(buttons).not.toContain('Unstar');
+
+    const notSpam = [...container.querySelectorAll('.list-actions button')].find((b) => b.textContent === 'Not spam');
+    notSpam.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const call = fetchStub.mock.calls.find(([url]) => String(url).includes('action=move'));
+    expect(call).toBeTruthy();
+    expect(JSON.parse(call[1].body)).toEqual({ ids: ['msg_1'], folder: 'inbox' });
   });
 });

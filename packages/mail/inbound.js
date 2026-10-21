@@ -106,6 +106,31 @@ export function hydrateInboundPayload(payload, content, attachments = []) {
 }
 
 /**
+ * Read the provider's spam verdict from the headers it already parses.
+ *
+ * SES (which backs Resend's inbound path) stamps `X-SES-Spam-Verdict` with
+ * PASS, FAIL or GRAY. GRAY means the message was not scanned, not that it is
+ * spam, so it stays unknown and the mail lands in the inbox.
+ *
+ * @returns {'spam'|'not-spam'|null} null when the provider gave no verdict
+ */
+function spamVerdictFromHeaders(headers) {
+  const ses = str(headers['x-ses-spam-verdict'], 20).trim().toLowerCase();
+  if (ses === 'fail') return 'spam';
+  if (ses === 'pass') return 'not-spam';
+
+  // Common aliases, for providers that do not use the SES header names.
+  const flagged = str(
+    headers['x-spam-status'] || headers['x-spam-flag'] || headers['x-spam-verdict'],
+    20,
+  ).trim().toLowerCase();
+  if (flagged === 'yes' || flagged === 'true' || flagged === 'spam') return 'spam';
+  if (flagged === 'no' || flagged === 'false' || flagged === 'ham') return 'not-spam';
+
+  return null;
+}
+
+/**
  * Normalise an inbound webhook payload.
  *
  * @param {object} payload Resend inbound event body
@@ -122,6 +147,7 @@ export function hydrateInboundPayload(payload, content, attachments = []) {
  *   subject: string, bodyHtml: string, bodyText: string, snippet: string,
  *   sizeBytes: number, hasAttachments: boolean,
  *   priority: string, scheduledFor: null,
+ *   spamVerdict: 'spam'|'not-spam'|null,
  *   headers: Record<string,string>, references: string[], inReplyTo: string|null,
  *   attachments: object[], receivedAt: string, rawMime: string|null
  * }}
@@ -198,6 +224,7 @@ export function normalizeInbound(payload, { receivedAtIso = null } = {}) {
     snippet,
     sizeBytes,
     hasAttachments: attachments.length > 0,
+    spamVerdict: spamVerdictFromHeaders(headers),
     priority: ['low', 'normal', 'high'].includes(message.priority) ? message.priority : 'normal',
     scheduledFor: null,
     headers,
@@ -292,8 +319,8 @@ export function normalizeDeliveryEvent(payload) {
  * Decide whether an inbound message should land in spam.
  *
  * Deliberately conservative: a false positive loses a real message, so this only
- * fires on an explicit provider verdict or an address the sender has configured
- * as always-bulk. Everything else goes to the inbox for a human to judge.
+ * fires on an explicit provider verdict (see `spamVerdictFromHeaders`).
+ * Everything else goes to the inbox for a human to judge.
  */
 export function shouldMarkSpam(message) {
   const verdict = message?.spamVerdict || message?.verdict;

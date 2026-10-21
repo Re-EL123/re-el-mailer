@@ -17,11 +17,12 @@ vi.mock('../apps/web/js/api.js', () => ({
   api: {
     mail: {
       get: vi.fn(async () => ({
-        message: { id: 'msg_1', subject: 'Quarterly numbers', from: { email: 'bob@example.com', name: 'Bob' }, to: [{ email: 'ada@re-el.co.za' }], cc: [], labels: [], attachments: [], bodyText: 'Hello there', isDraft: false, isStarred: false, receivedAt: '2026-10-01T09:00:00Z' },
+        message: { id: 'msg_1', subject: 'Quarterly numbers', folder: 'inbox', from: { email: 'bob@example.com', name: 'Bob' }, to: [{ email: 'ada@re-el.co.za' }], cc: [], labels: [], attachments: [], bodyText: 'Hello there', isDraft: false, isStarred: false, receivedAt: '2026-10-01T09:00:00Z' },
         thread: [],
       })),
       attachmentUrl: vi.fn(async () => ({ url: 'https://x/y' })),
       setLabels: vi.fn(async () => ({ ok: true })),
+      move: vi.fn(async () => ({ moved: 1 })),
     },
     automation: {
       notes: vi.fn(async () => ({ notes: [{ id: 'not_1', authorEmail: 'ada@re-el.co.za', body: 'Called the client', createdAt: new Date().toISOString() }] })),
@@ -144,6 +145,42 @@ describe('reply buttons', () => {
     // The reply-all button must not be the one the plain reply resolves to.
     container.querySelector('.reader-toolbar [aria-label="Reply"]').click();
     expect(window.location.hash).toBe(`#/compose?reply=msg_1&mailbox=${MB}`);
+  });
+});
+
+describe('spam actions', () => {
+  it('marks an inbox message as spam and leaves the reader', async () => {
+    const container = host();
+    await renderMessage(container, { params: ['msg_1'], query: { mailbox: MB } });
+    await waitFor('.reader-toolbar', container);
+
+    const button = container.querySelector('.reader-toolbar [aria-label="Mark as spam"]');
+    expect(button).not.toBeNull();
+    button.click();
+
+    await vi.waitFor(() => expect(api.mail.move).toHaveBeenCalledWith(['msg_1'], 'spam', MB));
+    expect(window.location.hash).toBe('#/inbox');
+  });
+
+  it('offers Not spam only for a message already in spam', async () => {
+    api.mail.get.mockResolvedValueOnce({
+      message: { id: 'msg_1', subject: 'Cheap pills', folder: 'spam', from: { email: 'spam@example.com', name: '' }, to: [{ email: 'ada@re-el.co.za' }], cc: [], labels: [], attachments: [], bodyText: 'Buy now', isDraft: false, isStarred: false, receivedAt: '2026-10-01T09:00:00Z' },
+      thread: [],
+    });
+
+    const container = host();
+    await renderMessage(container, { params: ['msg_1'], query: { mailbox: MB } });
+    await waitFor('.reader-toolbar', container);
+
+    expect(container.querySelector('.reader-toolbar [aria-label="Mark as spam"]')).toBeNull();
+    // Starred never lists the deleted views, so the reader does not offer a star.
+    expect(container.querySelector('.reader-toolbar [aria-label="Star this message"]')).toBeNull();
+    const button = container.querySelector('.reader-toolbar [aria-label="Move to inbox (not spam)"]');
+    expect(button).not.toBeNull();
+    button.click();
+
+    await vi.waitFor(() => expect(api.mail.move).toHaveBeenCalledWith(['msg_1'], 'inbox', MB));
+    expect(window.location.hash).toBe('#/inbox');
   });
 });
 

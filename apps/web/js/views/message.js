@@ -660,12 +660,32 @@ export async function renderMessage(container, ctx) {
           msg.isDraft ? el('button', { class: 'icon-btn', title: 'Edit', 'aria-label': 'Edit draft', onClick: () => navigate(`compose?draft=${msg.id}&mailbox=${mailboxId}`) }, icon('pencil')) : null,
           // aria-pressed carries the starred state: the icon alone distinguishes
           // the two only by fill, which a screen reader cannot perceive.
-          el('button', { class: 'icon-btn', title: msg.isStarred ? 'Unstar' : 'Star', 'aria-label': msg.isStarred ? 'Remove star' : 'Star this message', 'aria-pressed': String(Boolean(msg.isStarred)), onClick: async () => {
-            await api.mail.star([msg.id], !msg.isStarred, mailboxId); refresh();
-          } }, icon(msg.isStarred ? 'starFilled' : 'star')),
+          // Trash and spam are deleted views that Starred never lists, so a star
+          // there would silently go nowhere.
+          msg.folder === 'trash' || msg.folder === 'spam'
+            ? null
+            : el('button', { class: 'icon-btn', title: msg.isStarred ? 'Unstar' : 'Star', 'aria-label': msg.isStarred ? 'Remove star' : 'Star this message', 'aria-pressed': String(Boolean(msg.isStarred)), onClick: async () => {
+                await api.mail.star([msg.id], !msg.isStarred, mailboxId); refresh();
+              } }, icon(msg.isStarred ? 'starFilled' : 'star')),
           el('button', { class: 'icon-btn', title: 'Trash', 'aria-label': 'Move to trash', onClick: async () => {
             await api.mail.trash([msg.id], mailboxId); navigate('inbox');
           } }, icon('trash')),
+          // A false positive has to be recoverable from the reader, otherwise
+          // spam is a one-way trip and mail the filter got wrong is lost.
+          msg.folder === 'spam'
+            ? el('button', { class: 'icon-btn', title: 'Not spam', 'aria-label': 'Move to inbox (not spam)', onClick: async () => {
+                await api.mail.move([msg.id], 'inbox', mailboxId);
+                toast('Moved to inbox.', 'success');
+                navigate('inbox');
+              } }, icon('inbox'))
+            : null,
+          msg.folder === 'inbox'
+            ? el('button', { class: 'icon-btn', title: 'Mark spam', 'aria-label': 'Mark as spam', onClick: async () => {
+                await api.mail.move([msg.id], 'spam', mailboxId);
+                toast('Marked as spam.', 'success');
+                navigate('inbox');
+              } }, icon('flag'))
+            : null,
           el('button', { class: 'icon-btn', title: 'Reply', 'aria-label': 'Reply', onClick: () => navigate(`compose?reply=${msg.id}&mailbox=${mailboxId}`) }, icon('reply')),
           el('button', { class: 'icon-btn', title: 'Reply all', 'aria-label': 'Reply all', onClick: () => navigate(`compose?reply=${msg.id}&mode=all&mailbox=${mailboxId}`) }, icon('replyAll')),
           el('button', { class: 'icon-btn', title: 'Forward', 'aria-label': 'Forward', onClick: () => navigate(`compose?forward=${msg.id}&mailbox=${mailboxId}`) }, icon('forward')),

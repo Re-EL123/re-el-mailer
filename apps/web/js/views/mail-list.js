@@ -138,21 +138,23 @@ function messageRow(msg, { selected, onSelect, mailboxId }) {
       msg.hasAttachments ? el('span', { class: 'tag', title: 'Has attachments' }, icon('paperclip', { size: 14 })) : null,
       deliveryTag(msg),
     ),
-    el('button', {
-      class: `msg-star${msg.isStarred ? ' on' : ''}`,
-      title: msg.isStarred ? 'Unstar' : 'Star',
-      'aria-label': msg.isStarred ? 'Unstar message' : 'Star message',
-      'aria-pressed': String(Boolean(msg.isStarred)),
-      onClick: async (event) => {
-        event.stopPropagation();
-        try {
-          await api.mail.star([msg.id], !msg.isStarred, mailboxId);
-          refresh();
-        } catch (err) {
-          toast(err.message, 'error');
-        }
-      },
-    }, icon(msg.isStarred ? 'starFilled' : 'star', { size: 15 })),
+    msg.folder === 'trash' || msg.folder === 'spam'
+      ? null
+      : el('button', {
+          class: `msg-star${msg.isStarred ? ' on' : ''}`,
+          title: msg.isStarred ? 'Unstar' : 'Star',
+          'aria-label': msg.isStarred ? 'Unstar message' : 'Star message',
+          'aria-pressed': String(Boolean(msg.isStarred)),
+          onClick: async (event) => {
+            event.stopPropagation();
+            try {
+              await api.mail.star([msg.id], !msg.isStarred, mailboxId);
+              refresh();
+            } catch (err) {
+              toast(err.message, 'error');
+            }
+          },
+        }, icon(msg.isStarred ? 'starFilled' : 'star', { size: 15 })),
   );
   return row;
 }
@@ -232,6 +234,9 @@ export async function renderMailList(container, ctx) {
   // toggles per-row star_state; the bulk bar must match it.
   const inStarred = folder === 'starred';
   const inArchive = folder === 'archive';
+  // Trash and spam are deleted views: listStarred() and the starred count both
+  // exclude them, so offering Star there would silently do nothing visible.
+  const starrable = folder !== 'trash' && folder !== 'spam';
   const starLabel = inStarred ? 'Unstar' : 'Star';
   const archiveLabel = inArchive ? 'Unarchive' : 'Archive';
   const starAction = (ids) => api.mail.star(ids, !inStarred, mailboxId);
@@ -334,13 +339,21 @@ export async function renderMailList(container, ctx) {
     });
   }
 
+  const inDeletedView = folder === 'trash' || folder === 'spam';
+
   mount(
     actionsNode,
     actionsCount,
-    bulkButton(starLabel, () => starAction([...selected])),
+    starrable ? bulkButton(starLabel, () => starAction([...selected])) : null,
     bulkButton(archiveLabel, () => archiveAction([...selected])),
+    folder === 'spam'
+      ? bulkButton('Not spam', () => api.mail.move([...selected], 'inbox', mailboxId))
+      : null,
     bulkButton('Trash', () => api.mail.trash([...selected], mailboxId)),
-    folder === 'trash' || folder === 'spam'
+    folder === 'inbox'
+      ? bulkButton('Mark spam', () => api.mail.move([...selected], 'spam', mailboxId))
+      : null,
+    inDeletedView
       ? bulkButton('Delete forever', () => api.mail.deleteForever([...selected], mailboxId), true)
       : null,
     el('button', { class: 'btn btn-sm', text: 'Clear', onClick: () => { selected.clear(); updateActions(); renderRows(); } }),
@@ -396,7 +409,8 @@ export async function renderMailList(container, ctx) {
       box.checked = !box.checked;
       box.dispatchEvent(new Event('change', { bubbles: true }));
     },
-    s: () => actOnTargets(starAction),
+    // No star binding in the deleted views, matching the hidden row/bulk control.
+    ...(starrable ? { s: () => actOnTargets(starAction) } : {}),
     e: () => actOnTargets(archiveAction),
     hash: () => actOnTargets((ids) => api.mail.trash(ids, mailboxId)),
     // `u` unreads on a folder list but is "go back" in a reading pane; the reader

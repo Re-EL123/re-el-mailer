@@ -94,6 +94,34 @@ describe('loading the first page', () => {
     expect(container.querySelector('.list-more .small').textContent).toBe('Showing 10 of 25');
   });
 
+  it('uses the folder total for trash and spam, which are deleted views', async () => {
+    // Regression: folder counts excluded trash/spam (is_deleted), so the footer
+    // read "Showing 10 of 0" and the sidebar had no count for either folder.
+    const all = Array.from({ length: 25 }, (_, i) => message(`msg_${i}`));
+    const { container } = await render({
+      'action=list': (url) => {
+        const offset = offsetOf(url);
+        const page = all.slice(offset, offset + PAGE);
+        return {
+          messages: page,
+          counts: { spam: all.length },
+          inboxUnread: 0,
+          starred: 0,
+          hasMore: page.length === PAGE,
+          offset,
+        };
+      },
+    }, { params: ['spam'], query: {} });
+    await waitFor('.list-more button', container);
+
+    expect(container.querySelector('.list-more .small').textContent).toBe('Showing 10 of 25');
+    expect(container.querySelector('.side-link.active .pill').textContent).toBe('25');
+
+    container.querySelector('.list-more button').click();
+    await vi.waitFor(() => expect(rowCount(container)).toBe(20));
+    expect(container.querySelector('.list-more .small').textContent).toBe('Showing 20 of 25');
+  });
+
   it('does not show a paging control when everything fits on one page', async () => {
     const all = Array.from({ length: 3 }, (_, i) => message(`msg_${i}`));
     const { container } = await render({ 'action=list': pagedList(all) });
