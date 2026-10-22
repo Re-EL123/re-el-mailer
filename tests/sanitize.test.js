@@ -97,6 +97,15 @@ describe('sanitizeHtml', () => {
     expect(result).not.toContain('&amp;nbsp;');
   });
 
+  it('undoes one layer of double-escaped references in text', () => {
+    // Quoted replies arrive as `Branding &amp;amp; Technologies`; one decode
+    // leaves a normal `&amp;` reference, which renders as a single `&`.
+    const result = sanitizeHtml('<p>Re-EL Branding &amp;amp; Technologies &amp;nbsp; here</p>');
+    expect(result).toContain('Re-EL Branding &amp; Technologies');
+    expect(result).toContain('&nbsp; here');
+    expect(result).not.toContain('&amp;amp;');
+  });
+
   it('still escapes a bare ampersand', () => {
     const result = sanitizeHtml('<p>Tom & Jerry & more</p>');
     expect(result).toBe('<p>Tom &amp; Jerry &amp; more</p>');
@@ -123,6 +132,25 @@ describe('sanitizeHtml', () => {
   it('does not end a tag at a > inside a quoted value', () => {
     const result = sanitizeHtml('<img alt="a > b" src="https://x.test/a.png">');
     expect(result).toContain('alt="a &gt; b"');
+  });
+
+  it('does not let a void tag in the head swallow the body', () => {
+    // Regression: `meta` was treated as a container, so skipping to `</meta>`
+    // ran to the end of the document and every email with `<meta charset>` in
+    // its head was stored with no body at all.
+    const result = sanitizeHtml(
+      '<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="x.css">' +
+        '<title>Subject</title></head><body><p>Hello</p></body></html>',
+    );
+    expect(result).toContain('<p>Hello</p>');
+    expect(result).not.toContain('<meta');
+    expect(result).not.toContain('Subject');
+  });
+
+  it('keeps content after other void drop tags', () => {
+    expect(sanitizeHtml('<input value="x"><p>after input</p>')).toContain('<p>after input</p>');
+    expect(sanitizeHtml('<source src="x"><p>after source</p>')).toContain('<p>after source</p>');
+    expect(sanitizeHtml('<area href="x"><p>after area</p>')).toContain('<p>after area</p>');
   });
 
   it('handles empty input', () => {

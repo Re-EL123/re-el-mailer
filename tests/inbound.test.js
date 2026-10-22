@@ -277,6 +277,29 @@ describe('hydrateInboundPayload', () => {
     expect(hydrated.data.text).toBe('inline');
   });
 
+  it('fills a body the webhook left as an empty placeholder', () => {
+    // Regression: the webhook carried `html: ""` / `text: ""`, and spreading it
+    // over the fetched content blanked the body, so rich mail was stored as
+    // text-only and the reader showed the raw text part.
+    const placeholder = {
+      type: 'email.received',
+      data: { ...envelope.data, html: '', text: '' },
+    };
+
+    const hydrated = hydrateInboundPayload(placeholder, content);
+    expect(hydrated.data.html).toBe(content.html);
+    expect(hydrated.data.text).toBe(content.text);
+  });
+
+  it('keeps a text-only webhook body but still uses the stored HTML', () => {
+    const textOnly = { type: 'email.received', data: { ...envelope.data, text: 'stub' } };
+
+    const hydrated = hydrateInboundPayload(textOnly, content);
+    expect(hydrated.data.html).toBe(content.html);
+    expect(hydrated.data.text).toBe('stub');
+    expect(normalizeInbound(hydrated).bodyHtml).toContain('Please find it attached.');
+  });
+
   it('maps attachment download URLs onto the fields the handler stores', () => {
     const hydrated = hydrateInboundPayload(envelope, content, [
       {

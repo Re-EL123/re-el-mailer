@@ -114,7 +114,9 @@ async function loadInboundContent(payload) {
   const emailId = typeof source?.email_id === 'string' ? source.email_id.trim() : '';
 
   if (!emailId) return payload;
-  if (source?.html || source?.text) return payload;
+  // Only a full HTML body saves the round-trip. A text-only payload still
+  // needs the fetch: the stored copy is what carries the sender's HTML.
+  if (source?.html) return payload;
 
   try {
     const content = await getReceivedEmail(emailId);

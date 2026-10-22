@@ -50,8 +50,16 @@ const DROP_WITH_CONTENT = new Set([
   'dialog', 'portal', 'slot', 'plaintext', 'xmp', 'listing', 'marquee',
 ]);
 
-/** Void elements: never emit a closing tag for them. */
-const VOID_TAGS = new Set(['br', 'hr', 'img', 'col', 'wbr']);
+/**
+ * Void elements: they have no closing tag, so never emit one for them and never
+ * skip forward looking for one. `meta`/`link`/`input` matter most here: most
+ * mail has `<meta charset…>` in its head, and treating it as a container ate the
+ * rest of the document (the body was stored empty).
+ */
+const VOID_TAGS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta',
+  'param', 'source', 'track', 'wbr',
+]);
 
 /** Attributes allowed on every element. */
 const GLOBAL_ATTRS = new Set(['title', 'dir', 'lang', 'style', 'class']);
@@ -216,6 +224,10 @@ export function escapeHtml(value) {
  */
 function escapeText(value) {
   return String(value)
+    // Quoted mail is often escaped once for the text part and again for the
+    // HTML wrapper (`Branding &amp;amp; Technologies`); undo that one layer so
+    // the reader does not show the sender's `&amp;` source.
+    .replace(/&amp;(#\d{1,7}|#x[0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});/g, '&$1;')
     .replace(/&(?!(?:#\d{1,7}|#x[0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});)/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');

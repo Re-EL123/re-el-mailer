@@ -94,6 +94,11 @@ export function hydrateInboundPayload(payload, content, attachments = []) {
   // to; the content response describes the same message but from storage.
   merged.to = base.to ?? content.to;
   merged.received_for = base.received_for ?? content.received_for;
+  // The webhook may carry empty body placeholders (or only its text part), and
+  // spreading it last would blank out the fetched HTML. Fill only what is
+  // missing: a body the webhook genuinely supplied is left alone.
+  if (!merged.html && content.html) merged.html = content.html;
+  if (!merged.text && content.text) merged.text = content.text;
 
   if (attachments.length > 0) {
     merged.attachments = attachments.map((file) => ({
