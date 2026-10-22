@@ -156,6 +156,56 @@ describe('shouldAutoRead', () => {
   });
 });
 
+describe('html bodies', () => {
+  it('recovers HTML a provider delivered entity-escaped', () => {
+    // Regression: Oracle's mail arrived with `html` set to the escaped source,
+    // so the reader showed `<table role="presentation">…` as literal text.
+    const message = normalizeInbound({
+      data: {
+        from: 'noreply@oracle.com',
+        to: ['info@re-el.co.za'],
+        subject: 'Verify your email',
+        html: '&lt;table&gt;&lt;tr&gt;&lt;td&gt;Hello&nbsp;there&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;',
+        text: 'Hello there',
+      },
+    });
+
+    expect(message.bodyHtml).toContain('<table>');
+    expect(message.bodyHtml).toContain('Hello\u00a0there');
+    expect(message.bodyHtml).not.toContain('&lt;table');
+  });
+
+  it('leaves escaped tags inside real markup alone', () => {
+    const message = normalizeInbound({
+      data: {
+        from: 'dev@example.com',
+        to: ['info@re-el.co.za'],
+        subject: 'Code',
+        html: '<p>Use &lt;div&gt; for a block</p>',
+      },
+    });
+
+    expect(message.bodyHtml).toBe('<p>Use &lt;div&gt; for a block</p>');
+  });
+});
+
+describe('plain-text bodies', () => {
+  it('decodes entities the provider left in the text part', () => {
+    // Regression: senders' text parts often carry `&nbsp;` / `&#34;` from a
+    // naive HTML→text conversion, and the reader showed them literally.
+    const message = normalizeInbound({
+      data: {
+        from: 'news@example.com',
+        to: ['info@re-el.co.za'],
+        subject: 'Update',
+        text: 'Hi&nbsp;there, it&rsquo;s &#34;live&#34; &mdash; &amp; done',
+      },
+    });
+
+    expect(message.bodyText).toBe('Hi\u00a0there, it’s "live" — & done');
+  });
+});
+
 describe('hydrateInboundPayload', () => {
   // A real `email.received` body: envelope only, with an `email_id` to expand.
   const envelope = {

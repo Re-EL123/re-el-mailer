@@ -99,9 +99,41 @@ const BLOCK_TAGS = new Set([
 
 // ─── Small helpers ───────────────────────────────────────────────────────────
 
+/** Named references that actually appear in mail. Exact case wins, then lower. */
 const NAMED_ENTITIES = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#x27': "'",
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0',
+  iexcl: '¡', cent: '¢', pound: '£', curren: '¤', yen: '¥', brvbar: '¦',
+  sect: '§', uml: '¨', copy: '©', ordf: 'ª', laquo: '«', not: '¬',
+  shy: '\u00ad', reg: '®', macr: '¯', deg: '°', plusmn: '±', sup2: '²',
+  sup3: '³', acute: '´', micro: 'µ', para: '¶', middot: '·', cedil: '¸',
+  sup1: '¹', ordm: 'º', raquo: '»', frac14: '¼', frac12: '½', frac34: '¾',
+  iquest: '¿', times: '×', divide: '÷', euro: '€',
+  ensp: '\u2002', emsp: '\u2003', thinsp: '\u2009',
+  zwnj: '\u200c', zwj: '\u200d', lrm: '\u200e', rlm: '\u200f',
+  ndash: '–', mdash: '—', lsquo: '‘', rsquo: '’', sbquo: '‚',
+  ldquo: '“', rdquo: '”', bdquo: '„', dagger: '†', Dagger: '‡',
+  bull: '•', hellip: '…', permil: '‰', prime: '′', Prime: '″',
+  lsaquo: '‹', rsaquo: '›', oline: '‾', frasl: '⁄', trade: '™',
+  larr: '←', uarr: '↑', rarr: '→', darr: '↓', harr: '↔', crarr: '↵',
+  lArr: '⇐', uArr: '⇑', rArr: '⇒', dArr: '⇓', hArr: '⇔',
+  forall: '∀', part: '∂', exist: '∃', empty: '∅', nabla: '∇', isin: '∈',
+  notin: '∉', ni: '∋', prod: '∏', sum: '∑', minus: '−', lowast: '∗',
+  radic: '√', prop: '∝', infin: '∞', ang: '∠', and: '∧', or: '∨',
+  cap: '∩', cup: '∪', int: '∫', there4: '∴', sim: '∼', cong: '≅',
+  asymp: '≈', ne: '≠', equiv: '≡', le: '≤', ge: '≥', sub: '⊂',
+  sup: '⊃', nsub: '⊄', sube: '⊆', supe: '⊇', oplus: '⊕', otimes: '⊗',
+  perp: '⊥', sdot: '⋅', lceil: '⌈', rceil: '⌉', lfloor: '⌊', rfloor: '⌋',
+  lang: '⟨', rang: '⟩', loz: '◊', spades: '♠', clubs: '♣', hearts: '♥',
+  diams: '♦', check: '✓', star: '☆', starf: '★', phone: '☎',
 };
+
+/**
+ * Look up a named reference. HTML references are case-sensitive (`&Dagger;`
+ * is not `&dagger;`), but a lowercase fallback keeps `&AMP;`/`&NBSP;` working.
+ */
+function namedEntity(name) {
+  return NAMED_ENTITIES[name] ?? NAMED_ENTITIES[name.toLowerCase()];
+}
 
 function decodeEntities(value) {
   return String(value).replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (match, entity) => {
@@ -117,8 +149,49 @@ function decodeEntities(value) {
         return '';
       }
     }
-    return NAMED_ENTITIES[entity.toLowerCase()] ?? match;
+    return namedEntity(entity) ?? match;
   });
+}
+
+/**
+ * Decode character references in a *plain-text* body.
+ *
+ * Providers commonly hand us a `text` part whose prose still contains the
+ * sender's HTML entities (`&nbsp;`, `&mdash;`, `&#34;`), because it was
+ * generated from the HTML with a naive converter. Rendered with `textContent`
+ * they appear literally. Unlike `decodeEntities()` this is for text only, so
+ * it keeps `<` and `>` and leaves unknown references alone.
+ */
+export function decodeTextEntities(value) {
+  return String(value ?? '').replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (match, entity) => {
+    if (entity[0] === '#') {
+      const isHex = entity[1] === 'x' || entity[1] === 'X';
+      const code = Number.parseInt(isHex ? entity.slice(2) : entity.slice(1), isHex ? 16 : 10);
+      if (!Number.isFinite(code) || code <= 0 || code > 0x10ffff) return match;
+      if (code >= 0xd800 && code <= 0xdfff) return match;
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return match;
+      }
+    }
+    return namedEntity(entity) ?? match;
+  });
+}
+
+/**
+ * Does this HTML body arrive entity-escaped, i.e. as markup *text*?
+ *
+ * Some providers hand us the original HTML inside a JSON string that was
+ * escaped one time too many, so `html` literally starts `&lt;table …`. Feeding
+ * that to the sanitiser keeps it as text and the reader shows the raw tags.
+ * A body with any real tag is never treated this way.
+ */
+export function looksLikeEscapedHtml(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return false;
+  if (/<[a-zA-Z!/]/.test(text)) return false;
+  return /&lt;\/?(?:html|head|body|table|div|p|span|a|img|tr|td|th|br|style|meta|font|center|ul|ol|li|strong|em|h[1-6])\b/i.test(text);
 }
 
 export function escapeHtml(value) {
@@ -128,6 +201,24 @@ export function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * Escape a *text run* without double-escaping character references.
+ *
+ * The input is raw HTML source, so `&nbsp;` and `&#34;` in the original markup
+ * are already references the browser will decode. Running the general
+ * `escapeHtml()` over them turned them into `&amp;nbsp;`, which the browser
+ * then renders literally — every email written with entities displayed
+ * "Thanks for your interest&nbsp;in…" and "&#34;quoted&#34;". Only a bare `&`
+ * (one that does not start a valid reference) needs escaping; leaving a
+ * reference alone cannot reintroduce markup, because it stays text.
+ */
+function escapeText(value) {
+  return String(value)
+    .replace(/&(?!(?:#\d{1,7}|#x[0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});)/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 export function escapeAttr(value) {
@@ -318,35 +409,43 @@ export function sanitizeHtml(html, options = {}) {
   while (index < input.length && totalLength < maxLength && tagBudget > 0) {
     const lt = input.indexOf('<', index);
     if (lt === -1) {
-      if (droppedDepth === 0) emit(escapeHtml(input.slice(index)));
+      if (droppedDepth === 0) emit(escapeText(input.slice(index)));
       break;
     }
 
     if (lt > index) {
-      if (droppedDepth === 0) emit(escapeHtml(input.slice(index, lt)));
+      if (droppedDepth === 0) emit(escapeText(input.slice(index, lt)));
       index = lt;
     }
 
-    // Find the end of the tag, respecting quoted attribute values.
+    // Find the end of the tag, respecting quoted attribute values. A quote
+    // only opens a value straight after `=` (spaces allowed), as in HTML: real
+    // mail contains `style="colour: red; bgcolor="#fff"` with a missing close
+    // quote, and treating every `"` as a delimiter swallowed the whole body.
     let cursor = lt + 1;
     let quote = null;
+    let afterEquals = false;
     let tagEnd = -1;
     while (cursor < input.length) {
       const char = input[cursor];
       if (quote) {
         if (char === quote) quote = null;
-      } else if (char === '"' || char === "'") {
-        quote = char;
       } else if (char === '>') {
         tagEnd = cursor;
         break;
+      } else if (char === '"' || char === "'") {
+        if (afterEquals) quote = char;
+      }
+      if (!quote) {
+        if (char === '=') afterEquals = true;
+        else if (char !== ' ' && char !== '\t' && char !== '\n' && char !== '\r') afterEquals = false;
       }
       cursor += 1;
     }
 
     if (tagEnd === -1) {
       // Unterminated tag: treat the remainder as text.
-      if (droppedDepth === 0) emit(escapeHtml(input.slice(lt)));
+      if (droppedDepth === 0) emit(escapeText(input.slice(lt)));
       break;
     }
 
@@ -492,7 +591,8 @@ export function htmlToText(html) {
   working = working.replace(/<hr\s*\/?>/gi, '\n----------\n');
   working = working.replace(/<[^>]+>/g, '');
 
-  let text = decodeEntities(working);
+  // Text output may safely contain `<`/`>`; only markup had to be stripped.
+  let text = decodeTextEntities(working);
   text = text
     .replace(/\r\n?/g, '\n')
     .replace(/[ \t]+\n/g, '\n')

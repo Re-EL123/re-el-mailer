@@ -8,9 +8,11 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  decodeTextEntities,
   escapeHtml,
   htmlToText,
   isSafeUrl,
+  looksLikeEscapedHtml,
   makeSnippet,
   sanitizeHtml,
   slugify,
@@ -82,6 +84,47 @@ describe('sanitizeHtml', () => {
     expect(() => sanitizeHtml('<<>><script')).not.toThrow();
   });
 
+  it('leaves character references intact instead of double-escaping them', () => {
+    // Regression: text runs were escaped wholesale, turning `&nbsp;` into
+    // `&amp;nbsp;`, which the browser then showed literally. Real mail written
+    // with entities ("It&rsquo;s", "&#34;public&#34;") read as raw source.
+    const result = sanitizeHtml('<p>a&nbsp;b It&rsquo;s &#34;quoted&#34; &copy; &mdash;</p>');
+    expect(result).toContain('&nbsp;');
+    expect(result).toContain('&rsquo;');
+    expect(result).toContain('&#34;');
+    expect(result).toContain('&copy;');
+    expect(result).toContain('&mdash;');
+    expect(result).not.toContain('&amp;nbsp;');
+  });
+
+  it('still escapes a bare ampersand', () => {
+    const result = sanitizeHtml('<p>Tom & Jerry & more</p>');
+    expect(result).toBe('<p>Tom &amp; Jerry &amp; more</p>');
+  });
+
+  it('never lets a reference turn into markup', () => {
+    const result = sanitizeHtml('<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>');
+    expect(result).not.toContain('<script');
+    expect(result).toContain('&lt;script&gt;');
+    expect(sanitizeHtml('<p>&#60;img src=x&#62;</p>')).not.toContain('<img');
+  });
+
+  it('recovers a tag whose attribute quoting is broken', () => {
+    // Oracle's mail has `style="… bgcolor="#FFF">` with no close quote before
+    // `bgcolor`; treating every quote as a delimiter ate the rest of the body.
+    const result = sanitizeHtml(
+      '<table width="613" style="border:1px solid #ccc; bgcolor="#FFF"><tr><td>Hi</td></tr></table>',
+    );
+    expect(result).toContain('<table');
+    expect(result).toContain('<td>Hi</td>');
+    expect(result).not.toContain('&lt;table');
+  });
+
+  it('does not end a tag at a > inside a quoted value', () => {
+    const result = sanitizeHtml('<img alt="a > b" src="https://x.test/a.png">');
+    expect(result).toContain('alt="a &gt; b"');
+  });
+
   it('handles empty input', () => {
     expect(sanitizeHtml('')).toBe('');
     expect(sanitizeHtml(null)).toBe('');
@@ -132,6 +175,45 @@ describe('htmlToText', () => {
 
   it('drops script contents', () => {
     expect(htmlToText('<script>alert(1)</script><p>Text</p>')).not.toContain('alert');
+  });
+
+  it('decodes the entities senders write prose with', () => {
+    expect(htmlToText('<p>It&rsquo;s &copy; 2024 &mdash; &#34;quoted&#34; &hellip;</p>')).toContain(
+      'It’s © 2024 — "quoted" …',
+    );
+  });
+});
+
+describe('looksLikeEscapedHtml', () => {
+  it('recognises markup delivered as escaped text', () => {
+    expect(looksLikeEscapedHtml('&lt;table role=&quot;presentation&quot;&gt;')).toBe(true);
+    expect(looksLikeEscapedHtml('  &lt;p&gt;Hello&lt;/p&gt;')).toBe(true);
+  });
+
+  it('never mistakes real markup for escaped text', () => {
+    expect(looksLikeEscapedHtml('<table><tr><td>x</td></tr></table>')).toBe(false);
+    expect(looksLikeEscapedHtml('<p>Use &lt;div&gt; in HTML</p>')).toBe(false);
+  });
+
+  it('ignores ordinary text', () => {
+    expect(looksLikeEscapedHtml('Hello &amp; welcome')).toBe(false);
+    expect(looksLikeEscapedHtml('')).toBe(false);
+  });
+});
+
+describe('decodeTextEntities', () => {
+  it('decodes named and numeric references in plain text', () => {
+    expect(decodeTextEntities('Hi&nbsp;there It&rsquo;s &#34;ok&#34; &amp; done')).toBe(
+      'Hi\u00a0there It’s "ok" & done',
+    );
+  });
+
+  it('keeps angle brackets, which are safe in text', () => {
+    expect(decodeTextEntities('a &lt;b&gt; c')).toBe('a <b> c');
+  });
+
+  it('leaves unknown references untouched', () => {
+    expect(decodeTextEntities('&bogus; &notarealentity;')).toBe('&bogus; &notarealentity;');
   });
 });
 
@@ -261,7 +343,8 @@ describe('sanitizeHtml style blocks', () => {
     // text rather than live markup.
     expect(result).not.toContain('<script');
     expect(result).toContain('<style>p::before { content: "</style>');
-    expect(result).toContain('&quot; }');
+    // The tail is inert text; a raw quote needs no escaping there.
+    expect(result).toContain('" }');
   });
 
   it('keeps remote image urls but nulls anything that is not http(s)/data:image', () => {

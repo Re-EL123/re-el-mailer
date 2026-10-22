@@ -13,7 +13,13 @@
 
 import { mail as mailConfig } from '../shared/config.js';
 import { AppError, Codes } from '../shared/errors.js';
-import { htmlToText, makeSnippet, sanitizeHtml } from '../shared/sanitize.js';
+import {
+  decodeTextEntities,
+  htmlToText,
+  looksLikeEscapedHtml,
+  makeSnippet,
+  sanitizeHtml,
+} from '../shared/sanitize.js';
 import { emailDomain, normalizeEmail, parseAddress } from '../shared/email-address.js';
 import { normalizeMessageId, threadIdFromReferences } from '../shared/ids.js';
 
@@ -167,7 +173,17 @@ export function normalizeInbound(payload, { receivedAtIso = null } = {}) {
   }
 
   let bodyHtml = str(message.html, MAX_HTML_BYTES);
-  let bodyText = str(message.text || message.plain || message.plain_text, MAX_TEXT_BYTES);
+  // Undo a provider that delivered the markup entity-escaped (`&lt;table …`),
+  // otherwise the sanitiser stores text and the reader shows raw tags.
+  for (let pass = 0; pass < 2 && looksLikeEscapedHtml(bodyHtml); pass += 1) {
+    bodyHtml = decodeTextEntities(bodyHtml);
+  }
+  // A provider `text` part often still carries HTML entities (`&nbsp;`,
+  // `&#34;`) from a naive HTML→text conversion; decode them before storing so
+  // the reader, search and snippets all see real characters.
+  let bodyText = decodeTextEntities(
+    str(message.text || message.plain || message.plain_text, MAX_TEXT_BYTES),
+  );
 
   if (bodyHtml) {
     // Inbound HTML is hostile by default: sanitise before it is stored, so it is
